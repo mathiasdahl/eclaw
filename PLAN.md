@@ -320,15 +320,31 @@ Reason:
 
 ---
 
+# Additional tools (implemented)
+
+- `list_directory(path, max_entries?, include_hidden?)` — bounded listing; drops entries whose resolved path is sensitive.
+- `grep_files(root, pattern, glob?, max_matches?, max_files_scanned?, max_line_length?)` — literal substring search with match/file caps and a per-file byte ceiling (`eclaw-grep-max-file-bytes`).
+- `notes_write_text(relative_path, content, append?)` — create or overwrite (or append when `append` is true) only `.txt` files under `<project-root>/notes/`, where the project root is the directory containing `.eclaw`; paths are validated with `file-truename` so targets cannot escape `notes/`.
+- `skill_write(skill_dir, content)` — create or replace `.eclaw/skills/<skill_dir>/SKILL.md` only (`skill_dir` must match `[A-Za-z0-9_-]{1,64}`); clears `eclaw--skills-cache` after a successful write so the next completion picks up the skill index.
+
+---
+
+# Sensitive path policy (implemented)
+
+- Customize via `eclaw-sensitive-path-prefixes` and `eclaw-sensitive-path-files` (`defcustom`).
+- Enforced by `eclaw--path-sensitive-p` using `expand-file-name` + `file-truename` before any read/list/search touching disk.
+- Shared denial text: `eclaw--sensitive-path-msg`.
+
+---
+
 # Planned Tool Flow
 
 ```text
 user prompt
-→ model requests tool
-→ Emacs executes tool
-→ tool result added to conversation
-→ second model request
-→ assistant final response
+→ model requests one or more tools
+→ Emacs executes each; one tool message per call
+→ next model request(s) as needed
+→ assistant final response (or stop if a safety cap fires)
 ```
 
 ---
@@ -400,25 +416,18 @@ Avoid:
 
 ---
 
-# Important Constraint
+# Tool calling limits (safety)
 
-Initial scope intentionally limited.
+Implemented in `eclaw.el`:
 
-Supported initially:
+- Every `tool_calls` entry in an assistant message is executed and gets a matching `role: tool` message (parallel tool use in one turn is supported).
+- The model may go through multiple completion rounds (tools, then reply, or more tools) until it returns a plain assistant message.
+- Caps (both customizable via `defvar`): `eclaw-max-completions-per-prompt` (max HTTP round-trips per user message, default 32) and `eclaw-max-tokens-per-prompt` (cumulative `total_tokens` from each response `usage`, default 200000; exceeding it yields synthetic tool results and the turn ends).
 
-- single tool call
-- single execution
-- single followup response
+Design intent:
 
-Avoid initially:
-
-- autonomous recursive loops
-- multi-step agents
-- self-directed planning
-
-Reason:
-
-keep orchestration understandable and debuggable.
+- Allow multi-step tool use without unbounded cost or runaway loops.
+- Stay inspectable: each round is logged; limits surface clear messages in the buffer and echo area.
 
 ---
 
@@ -428,11 +437,24 @@ keep orchestration understandable and debuggable.
 
 Deliver:
 
-- tool schema support
+- tool schema support (including optional JSON parameters via `:optional` in `eclaw-deftool`)
 - tool call parsing
-- `read_file(path)`
+- `read_file(path)` plus sensitive-path enforcement
+- `list_directory(path, …)` and `grep_files(root, …)` with caps and the same policy
 - tool result messages
-- second-pass completion
+- multi-tool and multi-round completions with configurable caps (`eclaw-max-completions-per-prompt`, `eclaw-max-tokens-per-prompt`)
+
+---
+
+## Milestone 1b — Project agent skills (Agent Skills index)
+
+Deliver (project-local only, under `.eclaw/`):
+
+- discover skills at `.eclaw/skills/<skill-name>/SKILL.md` only
+- optional YAML frontmatter on `SKILL.md` with `name` and `description`
+- append an **index-only** block to the system message (name, description, absolute path); bodies are not inlined
+- cache invalidated when any discovered `SKILL.md` changes
+- no global or user-wide skills paths (future extension)
 
 ---
 
