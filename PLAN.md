@@ -1,5 +1,6 @@
-````markdown
 # eclaw — Architecture & Development Plan
+
+> **Keep this file current.** After any meaningful change to `eclaw.el` (features, limits, tools, milestones, or architecture), update this plan in the same session. Mark completed work as done, move stale “planned” items to “implemented” or delete them, and adjust “next steps” so the doc matches reality—not aspiration.
 
 ## Project Overview
 
@@ -16,537 +17,267 @@ Primary goals:
 Current model backend:
 
 - OpenRouter API
-- model: `deepseek/deepseek-v4-flash`
+- model: `deepseek/deepseek-v4-flash` (`eclaw-model`)
+
+Implementation: single file `eclaw.el` (~1,150 lines). Layers are documented in the file header; physical split into multiple files is still future work.
 
 ---
 
 # Current Features
 
-## OpenRouter Integration
+## OpenRouter integration
 
-Implemented:
+- API authentication via `OPENROUTER_API_KEY` or `eclaw-api-key`
+- HTTP via `url-retrieve-synchronously` (blocking)
+- Request construction: `eclaw--chat-request-payload`
+- Transport: `eclaw--post-chat-completion` → `eclaw-get-response`
+- JSON encode/decode; UTF-8 response bodies
+- Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 
-- API authentication via `OPENROUTER_API_KEY`
-- HTTP requests using `url-retrieve-synchronously`
-- JSON parsing using `json-read`
-- UTF-8 decoding support
+## Conversation and orchestration
 
-Current request endpoint:
+- **Canonical execution trace:** `eclaw-conversation` holds user, assistant (with optional `tool_calls`), and tool messages—no system row
+- **Per-turn flow:** append user message → `eclaw-build-messages` → loop completions until plain assistant reply or a cap fires
+- **Message builders:** `eclaw-system-message`, `eclaw-user-message`, `eclaw-assistant-message`, `eclaw-tool-message`
+- **System prompt:** `eclaw-system-prompt` plus optional project skills index block
+- **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`
 
-```text
-https://openrouter.ai/api/v1/chat/completions
-```
+## Tool calling (OpenAI/OpenRouter shape)
+
+- Registry: `eclaw-deftool` macro → `eclaw--tool-registry` (hash table; not `cl-defstruct`)
+- Optional parameters via `:optional` in `eclaw-deftool`
+- Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages`
+- Multi-tool per turn; multi-round loop in `eclaw-chat`
+- Toggle tools in requests: `eclaw-tools-enabled`
+- Safety caps: `eclaw-max-completions-per-prompt`, `eclaw-max-tokens-per-prompt`
+
+## Registered tools
+
+| Tool | Role |
+|------|------|
+| `read_file` | Read file text; sensitive-path policy |
+| `list_directory` | Bounded directory listing |
+| `grep_files` | Literal substring search with caps; external grep/rg or Elisp fallback |
+| `notes_write_text` | `.txt` only under `<project>/notes/` |
+| `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only |
+
+## Project agent skills (Milestone 1b — done)
+
+- Project root: directory containing `.eclaw` (`eclaw--skills-project-root`)
+- Discover: `.eclaw/skills/<name>/SKILL.md` only
+- YAML frontmatter: `name`, `description`; fallback from body
+- System message: **index only** (name, description, path); bodies loaded via `read_file`
+- Cache: `eclaw--skills-cache`, invalidated on mtime signature or `skill_write`
+
+## Sensitive path policy
+
+- `defcustom`: `eclaw-sensitive-path-prefixes`, `eclaw-sensitive-path-files`
+- `eclaw--path-sensitive-p` before read/list/grep
+- Denial: `eclaw--sensitive-path-msg`
+
+## grep_files backend
+
+- **`eclaw-grep-program`** (`defcustom`): `"grep"` (default), `"rg"`, or `nil` (Elisp only)
+- **Primary:** `call-process` on GNU grep (`-rF -n -H -I`) or ripgrep (`--fixed-strings`, `--no-ignore`)
+- **Fallback:** pure Elisp directory walk when the program is missing, exits non-zero, or `eclaw-grep-program` is `nil`
+- **Security:** every match path is post-filtered through `eclaw--path-sensitive-p` (external tools can follow symlinks)
+- **Semantics:** exhaustive search under `root` — **not** `.gitignore`-aware (ripgrep uses `--no-ignore` to match Elisp behavior)
+- **Caps:** global match limit and line truncation apply to all backends; `max_files_scanned` is enforced only on the Elisp fallback
+
+## Logging and UI
+
+- JSONL: `eclaw-log` → `eclaw-agent-log-file` (default `~/.emacs.d/eclaw-log.jsonl`)
+- One line per HTTP exchange: timestamp, model, request, response
+- UI: append-only buffer `*eclaw*`; token usage in echo area via `eclaw-report-usage`
+
+## Response helpers (implemented)
+
+- `eclaw-get-first-choice`, `eclaw-get-message`, `eclaw-get-content`, `eclaw-get-tool-calls`, `eclaw-get-finish-reason`, `eclaw-extract-usage`
+- `eclaw-get-content` falls back to `reasoning` when `content` is empty
 
 ---
 
 # Current Architecture
 
-## Conversation State
+## Layer map (logical; all in `eclaw.el` today)
 
-Current variable:
+```text
+UI (*eclaw*, eclaw-agent-chat)
+↓
+Orchestration (eclaw-chat — loop, caps, state)
+↓
+Conversation runtime (eclaw-conversation, message builders)
+↓
+Tool runtime (registry, dispatch, handlers)
+↓
+Transport (eclaw--post-chat-completion, eclaw-get-response)
+↓
+OpenRouter API
+```
+
+## Conversation state
 
 ```elisp
 (defvar eclaw-conversation nil)
 ```
 
-Stores OpenAI/OpenRouter-style message objects:
+Stores OpenAI/OpenRouter-style message alists, e.g.:
 
 ```elisp
-((role . "user")
- (content . "Hello"))
+((role . "user") (content . "Hello"))
+((role . "assistant") (tool_calls . [...]))
+((role . "tool") (tool_call_id . "...") (content . "..."))
 ```
 
-Current helper constructors:
-
-- `eclaw-system-message`
-- `eclaw-user-message`
-- `eclaw-assistant-message`
-
----
-
-## Message Building
-
-Current flow:
+**Canonical flow (implemented):**
 
 ```text
-system prompt
-+ conversation history
-+ current user prompt
+append user message to eclaw-conversation
+→ eclaw-build-messages  ; [system] + conversation
+→ HTTP + parse
+→ on tool_calls: append assistant + tool results, rebuild messages, repeat
+→ on plain content: append assistant reply, return
 ```
 
-Implemented in:
-
-```elisp
-eclaw-build-messages
-```
-
----
-
-## Chat Pipeline
-
-Current orchestration:
+## Tool turn flow (implemented)
 
 ```text
 user prompt
-→ build messages
-→ HTTP request
-→ parse response
-→ extract content
-→ update conversation
-→ log request/response
-→ report token usage
-→ render in *eclaw*
+→ model may return tool_calls (one or many)
+→ Emacs runs each tool → one role: tool message per call
+→ next completion round as needed
+→ final assistant text (or synthetic stop message if a cap fires)
 ```
 
-Primary entrypoints:
+## Tool message shapes (implemented)
 
-- `eclaw-chat`
-- `eclaw-agent-chat`
+Assistant with tools:
+
+```json
+{ "role": "assistant", "tool_calls": [...] }
+```
+
+Tool result:
+
+```json
+{ "role": "tool", "tool_call_id": "...", "content": "..." }
+```
 
 ---
 
-## Logging
+# Completed milestones
 
-JSONL logging implemented.
+## Milestone 1 — Tool calling MVP ✓
 
-Format:
+- `eclaw-deftool` schema and optional parameters
+- Tool call parsing and dispatch
+- `read_file`, `list_directory`, `grep_files` with sensitive-path policy and caps
+- `notes_write_text`, `skill_write` with path sandboxing
+- Tool result messages; multi-tool and multi-round loop with caps
 
-- one JSON object per line
-- includes:
-  - timestamp
-  - model
-  - full request payload
-  - full response payload
+## Milestone 1b — Project agent skills ✓
 
-Log file:
+- `.eclaw/skills/*/SKILL.md` discovery and index in system prompt
+- YAML frontmatter; mtime-based cache invalidation
+- No global/user-wide skill paths (extension point for later)
+
+---
+
+# Current known limitations
+
+## Synchronous requests
+
+- `url-retrieve-synchronously` freezes Emacs for each completion round
+- **Next:** Milestone 4 — async `url-retrieve`
+
+## Global conversation state
+
+- Single `eclaw-conversation` for all buffers/projects
+- **Next:** Milestone 2 — `defvar-local` or project-keyed sessions
+
+## Minimal UI
+
+- No `eclaw-mode`, tool visualization, navigation, or syntax highlighting
+- **Next:** Milestone 3
+
+## Monolithic source
+
+- All layers in one file; transport not split from orchestration
+- **Next:** transport extract + optional file layout (below)
+
+---
+
+# Upcoming work
+
+## Immediate architectural goals
+
+`eclaw-chat` still owns orchestration, logging, and state mutation alongside calling transport. Target: thin orchestration + dedicated transport function.
+
+### 1. Transport layer (not done)
+
+Introduce something like:
+
+```elisp
+eclaw-send-request  ; or rename eclaw--post-chat-completion when public
+```
+
+Responsibility: encode payload, POST, parse JSON, signal on HTTP/API errors—**no** conversation mutation, rendering, or tool dispatch.
 
 ```text
-~/.emacs.d/eclaw-log.jsonl
+messages → request payload → HTTP → parsed response alist
 ```
 
----
+Today: `eclaw--post-chat-completion` + `eclaw-get-response` (private, coupled to chat loop).
 
-# Important Bug Already Fixed
-
-There were accidentally two definitions of:
-
-```elisp
-eclaw-build-messages
-```
-
-The duplicate definition removed conversation history.
-
-Fix:
-
-- remove duplicate definition
-- preserve conversation inclusion
-
----
-
-# Current Known Limitations
-
-## Synchronous Requests
-
-Current transport:
-
-```elisp
-url-retrieve-synchronously
-```
-
-Problem:
-
-- freezes Emacs during requests
-
-Future fix:
-
-- migrate to async `url-retrieve`
-
----
-
-## Global Conversation State
-
-Current design:
-
-```elisp
-(defvar eclaw-conversation nil)
-```
-
-Problem:
-
-- single shared session
-- not buffer-local
-- not project-local
-
-Future direction:
+### 2. Session isolation — Milestone 2
 
 ```elisp
 (defvar-local eclaw-conversation nil)
 ```
 
----
+Or bind conversation to project root. Goals: multiple simultaneous sessions, per-project traces.
 
-## Minimal UI
+### 3. Major mode — Milestone 3
 
-Current UI:
+`eclaw-mode` on `*eclaw*`: RET to send, faces, sections, optional collapsible tool rounds, token stats.
 
-- append-only text rendering
-- single `*eclaw*` buffer
+### 4. Async transport — Milestone 4
 
-No:
+Replace `url-retrieve-synchronously` with `url-retrieve` and callbacks. Prerequisite for responsive multi-round tool use and streaming.
 
-- dedicated major mode
-- message rendering abstraction
-- tool visualization
-- navigation
-- syntax highlighting
+### 5. Streaming — Milestone 5
 
----
+Token streaming and incremental buffer updates; needs async transport and a small renderer abstraction.
 
-# Immediate Architectural Goals
+### 6. Stronger edit tools (optional)
 
-## Refactor `eclaw-chat`
-
-Current problem:
-
-`eclaw-chat` performs too many responsibilities:
-
-- transport
-- orchestration
-- parsing
-- logging
-- state mutation
-
-Goal:
-
-Separate layers cleanly.
+Bounded `write_file` / patch tool under the same path discipline as `notes_write_text`—not started; higher risk than read-only tools.
 
 ---
 
-# Planned Refactor
+# Suggested future file layout
 
-## 1. Transport Layer
-
-Introduce:
-
-```elisp
-eclaw-send-request
-```
-
-Responsibility:
-
-- HTTP requests only
-- JSON encoding/decoding
-- API communication only
-
-No:
-
-- state mutation
-- rendering
-- orchestration
-
-Target structure:
+Still one file. When splitting, prefer:
 
 ```text
-messages
-→ request payload
-→ HTTP
-→ parsed response
+eclaw-core.el       ; orchestration, conversation
+eclaw-http.el       ; transport
+eclaw-conversation.el
+eclaw-tools.el      ; registry, dispatch, handlers
+eclaw-ui.el
+eclaw-logging.el
+eclaw-mode.el
 ```
 
 ---
 
-## 2. Response Helpers
+# Historical note
 
-Introduce helpers:
-
-```elisp
-eclaw-get-message
-eclaw-get-content
-eclaw-get-tool-calls
-eclaw-extract-usage
-```
-
-Reason:
-
-Tool calling responses may not contain normal content.
+Duplicate `eclaw-build-messages` once dropped conversation history; removed so history is always included in outgoing payloads.
 
 ---
 
-## 3. Canonical Conversation State
-
-Current approach:
-
-```text
-temporary prompt insertion
-→ send request
-→ persist afterward
-```
-
-Planned architecture:
-
-```text
-append message to conversation first
-→ build request from conversation
-→ send request
-→ append assistant response
-```
-
-Conversation becomes canonical execution state.
-
----
-
-# Tool Calling Roadmap
-
-## Primary Goal
-
-Add OpenAI/OpenRouter-compatible tool calling support.
-
----
-
-# First Tool
-
-Recommended initial tool:
-
-```text
-read_file(path)
-```
-
-Reason:
-
-- deterministic
-- easy to debug
-- high utility
-- safe compared to write/edit tools
-
----
-
-# Additional tools (implemented)
-
-- `list_directory(path, max_entries?, include_hidden?)` — bounded listing; drops entries whose resolved path is sensitive.
-- `grep_files(root, pattern, glob?, max_matches?, max_files_scanned?, max_line_length?)` — literal substring search with match/file caps and a per-file byte ceiling (`eclaw-grep-max-file-bytes`).
-- `notes_write_text(relative_path, content, append?)` — create or overwrite (or append when `append` is true) only `.txt` files under `<project-root>/notes/`, where the project root is the directory containing `.eclaw`; paths are validated with `file-truename` so targets cannot escape `notes/`.
-- `skill_write(skill_dir, content)` — create or replace `.eclaw/skills/<skill_dir>/SKILL.md` only (`skill_dir` must match `[A-Za-z0-9_-]{1,64}`); clears `eclaw--skills-cache` after a successful write so the next completion picks up the skill index.
-
----
-
-# Sensitive path policy (implemented)
-
-- Customize via `eclaw-sensitive-path-prefixes` and `eclaw-sensitive-path-files` (`defcustom`).
-- Enforced by `eclaw--path-sensitive-p` using `expand-file-name` + `file-truename` before any read/list/search touching disk.
-- Shared denial text: `eclaw--sensitive-path-msg`.
-
----
-
-# Planned Tool Flow
-
-```text
-user prompt
-→ model requests one or more tools
-→ Emacs executes each; one tool message per call
-→ next model request(s) as needed
-→ assistant final response (or stop if a safety cap fires)
-```
-
----
-
-# Planned Tool Message Types
-
-## Assistant Tool Request
-
-```json
-{
-  "role": "assistant",
-  "tool_calls": [...]
-}
-```
-
-## Tool Result Message
-
-```json
-{
-  "role": "tool",
-  "tool_call_id": "...",
-  "content": "..."
-}
-```
-
----
-
-# Planned Tool Infrastructure
-
-## Tool Registry
-
-Planned structure:
-
-```elisp
-(cl-defstruct eclaw-tool
-  name
-  description
-  parameters
-  function)
-```
-
-Possible future registry:
-
-```elisp
-(defvar eclaw-tool-registry ...)
-```
-
----
-
-## Tool Dispatcher
-
-Future dispatcher:
-
-```elisp
-eclaw-dispatch-tool-call
-```
-
-Responsibilities:
-
-- locate tool
-- parse arguments
-- execute tool
-- return tool result message
-
-Avoid:
-
-- eval-based dispatch
-- implicit execution
-
----
-
-# Tool calling limits (safety)
-
-Implemented in `eclaw.el`:
-
-- Every `tool_calls` entry in an assistant message is executed and gets a matching `role: tool` message (parallel tool use in one turn is supported).
-- The model may go through multiple completion rounds (tools, then reply, or more tools) until it returns a plain assistant message.
-- Caps (both customizable via `defvar`): `eclaw-max-completions-per-prompt` (max HTTP round-trips per user message, default 32) and `eclaw-max-tokens-per-prompt` (cumulative `total_tokens` from each response `usage`, default 200000; exceeding it yields synthetic tool results and the turn ends).
-
-Design intent:
-
-- Allow multi-step tool use without unbounded cost or runaway loops.
-- Stay inspectable: each round is logged; limits surface clear messages in the buffer and echo area.
-
----
-
-# Future Milestones
-
-## Milestone 1 — Tool Calling MVP
-
-Deliver:
-
-- tool schema support (including optional JSON parameters via `:optional` in `eclaw-deftool`)
-- tool call parsing
-- `read_file(path)` plus sensitive-path enforcement
-- `list_directory(path, …)` and `grep_files(root, …)` with caps and the same policy
-- tool result messages
-- multi-tool and multi-round completions with configurable caps (`eclaw-max-completions-per-prompt`, `eclaw-max-tokens-per-prompt`)
-
----
-
-## Milestone 1b — Project agent skills (Agent Skills index)
-
-Deliver (project-local only, under `.eclaw/`):
-
-- discover skills at `.eclaw/skills/<skill-name>/SKILL.md` only
-- optional YAML frontmatter on `SKILL.md` with `name` and `description`
-- append an **index-only** block to the system message (name, description, absolute path); bodies are not inlined
-- cache invalidated when any discovered `SKILL.md` changes
-- no global or user-wide skills paths (future extension)
-
----
-
-## Milestone 2 — Session Isolation
-
-Convert conversation state to buffer-local/project-local.
-
-Goals:
-
-- multiple simultaneous sessions
-- project-specific agents
-- isolated execution traces
-
----
-
-## Milestone 3 — Major Mode
-
-Create:
-
-```text
-eclaw-mode
-```
-
-Potential features:
-
-- RET to send
-- syntax highlighting
-- message sections
-- collapsible tool calls
-- token stats
-- replay support
-
----
-
-## Milestone 4 — Async Transport
-
-Replace:
-
-```elisp
-url-retrieve-synchronously
-```
-
-With:
-
-```elisp
-url-retrieve
-```
-
-Goals:
-
-- non-blocking requests
-- future streaming support
-- responsive UI
-
----
-
-## Milestone 5 — Streaming
-
-Potential future support:
-
-- token streaming
-- incremental rendering
-- live assistant output
-
-Likely requires:
-
-- async transport
-- renderer abstraction
-
----
-
-# Long-Term Architectural Direction
-
-Desired layered architecture:
-
-```text
-UI Layer
-↓
-Orchestration Layer
-↓
-Conversation Runtime
-↓
-Tool Runtime
-↓
-Transport Layer
-↓
-Model API
-```
-
----
-
-# Important Design Philosophy
+# Design philosophy
 
 eclaw should remain:
 
@@ -556,53 +287,16 @@ eclaw should remain:
 - modular
 - educational
 
-Avoid:
-
-- hidden magic
-- premature autonomy
-- excessive framework abstraction
-
-The goal is to understand and build agent systems step-by-step.
+Avoid hidden magic, premature autonomy, and framework-heavy abstractions.
 
 ---
 
-# Suggested Future File Layout
+# Architectural stance (current)
 
-```text
-eclaw-core.el
-eclaw-http.el
-eclaw-conversation.el
-eclaw-tools.el
-eclaw-ui.el
-eclaw-logging.el
-eclaw-mode.el
-```
+The system **is** an LLM orchestration runtime, not a thin chat client.
 
----
+- `eclaw-conversation` is an **execution trace** (user, assistant, tool events)
+- Tool calls are **execution events** logged per HTTP round
+- Project skills are **indexed capabilities** loaded on demand via `read_file`
 
-# Key Architectural Insight
-
-The system is transitioning from:
-
-```text
-chat client
-```
-
-to:
-
-```text
-LLM orchestration runtime
-```
-
-Conversation history becomes:
-
-```text
-execution trace
-```
-
-rather than simple dialogue history.
-
-Tool calls are execution events.
-
-This is the core architectural shift toward real coding-agent design.
-````
+Further evolution: async transport, isolated sessions, richer UI—without losing inspectability.

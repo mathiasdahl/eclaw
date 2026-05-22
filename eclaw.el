@@ -34,6 +34,8 @@
 ;; `list_directory', `grep_files') guarded by a sensitive-path policy,
 ;; plus narrow writes (`notes_write_text', `skill_write') limited to
 ;; `notes/*.txt' and `.eclaw/skills/<name>/SKILL.md' under the `.eclaw' root.
+;; `grep_files' prefers `eclaw-grep-program' (GNU grep or ripgrep) with an
+;; Elisp fallback; search is exhaustive under the given root (not gitignore-aware).
 ;;
 ;; Layers (all in this file; transport is not yet split out):
 ;;
@@ -51,10 +53,10 @@
 ;; - UI: `eclaw-agent-chat' appends to buffer `*eclaw*'; logging writes
 ;;   JSON lines to `eclaw-agent-log-file'.
 ;;
-;; Conversation state (`eclaw-conversation') stores only user, assistant,
-;; and tool messages from prior turns—not a second copy of the system
-;; message.  Each request prepends a fresh system message via
-;; `eclaw-system-message'.
+;; Conversation state (`eclaw-conversation') is the canonical execution
+;; trace: user, assistant, and tool messages only (no system row).  Each
+;; user turn is appended before any HTTP request; outgoing payloads are
+;; built as [system] + `eclaw-conversation' via `eclaw-build-messages'.
 ;;
 ;; Limitations: blocking HTTP, global session, no streaming.
 ;;
@@ -272,11 +274,12 @@ project root (`eclaw--skills-project-root').  List is sorted by name."
 ;;; Conversation and message alists
 
 (defvar eclaw-conversation nil
-  "List of prior chat messages for the active session, excluding system.
+  "Canonical chat history for the active session, excluding system.
 Each element is an alist: user (`role' user, `content'), assistant
 (`role' assistant, `content' and/or `tool_calls' as returned by the
-API), or tool (`role' tool, `tool_call_id', `content').  Mutated by
-`eclaw-chat', `eclaw-update-conversation', and `eclaw-reset-conversation'.")
+API), or tool (`role' tool, `tool_call_id', `content').  The current
+user turn is appended at the start of `eclaw-chat' before any request.
+Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
 (defun eclaw-reset-conversation ()
   "Clear `eclaw-conversation' and confirm in the echo area."
@@ -307,21 +310,29 @@ When the current `default-directory' is under a project with
     (tool_call_id . ,tool-call-id)
     (content . ,content)))
 
-(defun eclaw-build-messages (prompt)
-  "Build the message list for a new user PROMPT.
-Result is [system] + `eclaw-conversation' + [user PROMPT] as a flat list
-suitable for `eclaw--chat-request-payload'."
-  (append
-   (list (eclaw-system-message))
-   eclaw-conversation
-   (list (eclaw-user-message prompt))))
+(defun eclaw-build-messages ()
+  "Build the outgoing message list from canonical `eclaw-conversation'.
+Returns [system] + conversation as a flat list suitable for
+`eclaw--chat-request-payload'.  The conversation must already include
+the current user turn (and any in-flight assistant/tool rows)."
+  (append (list (eclaw-system-message)) eclaw-conversation nil))
 
-(defun eclaw-build-messages-continuation ()
-  "Build the message list after a tool result was appended to history.
-Returns a list whose `cdr' is exactly `eclaw-conversation' (already
-including the latest user, assistant `tool_calls', and tool messages)
-and whose `car' is the current system message."
-  (cons (eclaw-system-message) eclaw-conversation))
+(defun eclaw--normalize-assistant-message (message)
+  "Return a compact assistant MESSAGE alist for conversation storage.
+Keeps only `role', `content', and `tool_calls' (when present)."
+  (when message
+    (let ((out (list (cons 'role "assistant")
+                     (cons 'content (alist-get 'content message)))))
+      (when-let ((tool-calls (alist-get 'tool_calls message)))
+        (push (cons 'tool_calls tool-calls) out))
+      out)))
+
+(defun eclaw-append-assistant-reply (content)
+  "Append assistant CONTENT to `eclaw-conversation'.
+CONTENT may be nil; it is stored as an empty string."
+  (setq eclaw-conversation
+        (nconc eclaw-conversation
+               (list (eclaw-assistant-message (or content ""))))))
 
 ;;; Tools (registry and `eclaw-deftool')
 
@@ -368,7 +379,18 @@ Compared via `file-truename' after `expand-file-name'."
   "Constant denial message returned to the model for blocked paths.")
 
 (defvar eclaw-grep-max-file-bytes (* 2 1024 1024)
-  "Skip files larger than this many bytes in `eclaw-tool-grep-files'.")
+  "Skip files larger than this many bytes in the Elisp `grep_files' backend.")
+
+(defcustom eclaw-grep-program "grep"
+  "External program for `grep_files', or nil for pure Emacs Lisp only.
+When \"grep\" or \"rg\", eclaw runs that executable via `call-process' and
+falls back to the built-in scanner if the program is missing or fails.
+Ripgrep is invoked with `--no-ignore' so search stays exhaustive under ROOT
+(same semantics as the Elisp backend; not `.gitignore'-aware)."
+  :type '(choice (const :tag "GNU grep" "grep")
+                 (const :tag "ripgrep" "rg")
+                 (const :tag "Emacs Lisp only" nil))
+  :group 'eclaw)
 
 (defun eclaw--canonical-path (path)
   "Return `file-truename' of expanded PATH, or nil if resolution fails."
@@ -646,7 +668,8 @@ Announces progress in the echo area, then blocks until
         (url-request-extra-headers
          `(("Authorization" . ,(concat "Bearer " (eclaw-get-api-key)))
            ("Content-Type" . "application/json")))
-        (url-request-data (json-encode request-payload)))
+        (url-request-data
+         (encode-coding-string (json-encode request-payload) 'utf-8)))
     (eclaw-get-response
      (url-retrieve-synchronously
       "https://openrouter.ai/api/v1/chat/completions"))))
@@ -737,8 +760,8 @@ or an error description."
 (defun eclaw-tool-grep-files (root pattern glob max-matches max-files-scanned max-line-length)
   "Search files under ROOT for a literal PATTERN; return capped matches.
 GLOB filters basenames with shell wildcards (empty means all).  Skip paths
-matching `eclaw--path-sensitive-p' and files larger than
-`eclaw-grep-max-file-bytes'."
+matching `eclaw--path-sensitive-p'.  When `eclaw-grep-program' names an
+executable, use it first and fall back to the Elisp scanner on failure."
   (let* ((root-abs (expand-file-name root))
          (pat (or pattern ""))
          (glob-str (or glob ""))
@@ -751,10 +774,7 @@ matching `eclaw--path-sensitive-p' and files larger than
                   5000))
          (lim-l (if (and max-line-length (integerp max-line-length) (> max-line-length 0))
                     max-line-length
-                  500))
-         (regexp (regexp-quote pat))
-         (glob-re (unless (string-empty-p glob-str)
-                    (wildcard-to-regexp glob-str))))
+                  500)))
     (cond
      ((string-empty-p pat)
       "Error: grep_files requires non-empty pattern (literal substring).")
@@ -764,57 +784,149 @@ matching `eclaw--path-sensitive-p' and files larger than
       eclaw--sensitive-path-msg)
      (t
       (condition-case err
-          (let ((match-lines nil)
-                (match-count 0)
-                (scan-count 0)
-                (truncated-files nil)
-                (truncated-matches nil))
-            (catch 'eclaw-grep-done
-              (dolist (file (directory-files-recursively root-abs "." nil t nil))
-                (when (>= scan-count lim-f)
-                  (setq truncated-files t)
-                  (throw 'eclaw-grep-done nil))
-                (setq scan-count (1+ scan-count))
-                (when (and (file-regular-p file)
-                           (not (eclaw--path-sensitive-p file))
-                           (or (null glob-re)
-                               (string-match-p glob-re (file-name-nondirectory file))))
-                  (let* ((attrs (file-attributes file))
-                         (size (and attrs
-                                    (if (fboundp 'file-attribute-size)
-                                        (file-attribute-size attrs)
-                                      (nth 7 attrs)))))
-                    (when (and size (<= size eclaw-grep-max-file-bytes))
-                      (condition-case nil
-                          (with-temp-buffer
-                            (insert-file-contents-literally file)
-                            (goto-char (point-min))
-                            (while (and (< match-count lim-m) (not (eobp)))
-                              (let* ((ln (line-number-at-pos))
-                                     (beg (line-beginning-position))
-                                     (end (line-end-position))
-                                     (line (buffer-substring-no-properties beg end)))
-                                (forward-line 1)
-                                (when (string-match-p regexp line)
-                                  (setq match-count (1+ match-count))
-                                  (push (format "%s:%d:%s"
-                                                file ln
-                                                (eclaw--truncate-string line lim-l))
-                                        match-lines)
-                                  (when (>= match-count lim-m)
-                                    (setq truncated-matches t)
-                                    (throw 'eclaw-grep-done nil))))))
-                        (error nil)))))))
-            (concat
-             (if match-lines
-                 (mapconcat #'identity (nreverse match-lines) "\n")
-               "(no matches)")
-             (concat
-              (when truncated-matches
-                (format "\n[eclaw: match limit %d reached]" lim-m))
-              (when truncated-files
-                (format "\n[eclaw: file scan limit %d reached]" lim-f)))))
+          (or (and eclaw-grep-program
+                   (eclaw--grep-via-process eclaw-grep-program root-abs pat glob-str
+                                              lim-m lim-f lim-l))
+              (eclaw--grep-via-elisp root-abs pat glob-str lim-m lim-f lim-l))
         (error (format "Error during grep_files under %S: %S" root-abs err)))))))
+
+(defun eclaw--grep-resolved-program (program)
+  "Return absolute path to PROGRAM when executable, otherwise nil."
+  (when (and program (not (string-empty-p program)))
+    (cond
+     ((and (file-name-absolute-p program) (file-executable-p program))
+      program)
+     ((executable-find program)))))
+
+(defun eclaw--grep-build-process-args (program root pattern glob-str)
+  "Return argv list for grep/rg PROGRAM searching ROOT for literal PATTERN.
+Optional GLOB-STR filters basenames (empty means all files)."
+  (cond
+   ((string-equal program "rg")
+    (append '("--fixed-strings" "--line-number" "--no-heading"
+              "--no-messages" "--no-ignore")
+            (when (not (string-empty-p glob-str))
+              (list "--glob" glob-str))
+            (list "-e" pattern root)))
+   ((string-equal program "grep")
+    (append '("-r" "-F" "-n" "-H" "-I" "--no-messages" "-D" "skip")
+            (when (not (string-empty-p glob-str))
+              (list "--include" glob-str))
+            (list "-e" pattern root)))
+   (t
+    (error "Unsupported eclaw-grep-program %S" program))))
+
+(defun eclaw--grep-run-process (program args)
+  "Run PROGRAM with ARGS via `call-process'.
+Return (STATUS . OUTPUT-STRING).  STATUS is the process exit code."
+  (with-temp-buffer
+    (let ((status (apply #'call-process program nil (current-buffer) nil args)))
+      (cons status (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defun eclaw--grep-parse-match-line (line)
+  "Parse one grep/rg output LINE into (FILE LINE-NUM CONTENT), or nil."
+  (when (and line (not (string-empty-p line)))
+    (when (string-match "\\`\\([^:\n]+\\):\\([0-9]+\\):\\(.*\\)\\'" line)
+      (list (match-string 1 line)
+            (string-to-number (match-string 2 line))
+            (match-string 3 line)))))
+
+(defun eclaw--grep-filter-sensitive-lines (raw-lines lim-m lim-l)
+  "Filter RAW-LINES, drop sensitive paths, cap at LIM-M matches.
+Return (MATCH-LINES TRUNCATED-MATCHES-P)."
+  (let ((out nil)
+        (count 0)
+        (truncated nil))
+    (dolist (line raw-lines)
+      (when-let* ((parsed (eclaw--grep-parse-match-line line))
+                  (file (expand-file-name (car parsed)))
+                  (_ (not (eclaw--path-sensitive-p file))))
+        (if (< count lim-m)
+            (let ((ln (cadr parsed))
+                  (content (caddr parsed)))
+              (push (format "%s:%d:%s"
+                            file ln
+                            (eclaw--truncate-string content lim-l))
+                    out)
+              (setq count (1+ count)))
+          (setq truncated t))))
+    (list (nreverse out) truncated)))
+
+(defun eclaw--grep-format-results (match-lines lim-m lim-f truncated-matches truncated-files)
+  "Format MATCH-LINES and optional truncation markers into a result string."
+  (concat
+   (if match-lines
+       (mapconcat #'identity match-lines "\n")
+     "(no matches)")
+   (concat
+    (when truncated-matches
+      (format "\n[eclaw: match limit %d reached]" lim-m))
+    (when truncated-files
+      (format "\n[eclaw: file scan limit %d reached]" lim-f)))))
+
+(defun eclaw--grep-via-process (program root pattern glob-str lim-m lim-f lim-l)
+  "Search with external grep/rg PROGRAM; return result string or nil on failure."
+  (when-let ((exe (eclaw--grep-resolved-program program)))
+    (condition-case nil
+        (let* ((args (eclaw--grep-build-process-args program root pattern glob-str))
+               (proc (eclaw--grep-run-process exe args))
+               (status (car proc))
+               (output (cdr proc)))
+          (when (member status '(0 1))
+            (let ((filtered (eclaw--grep-filter-sensitive-lines
+                             (split-string output "\n" t)
+                             lim-m lim-l)))
+              (eclaw--grep-format-results (car filtered) lim-m lim-f (cadr filtered) nil))))
+      (error nil))))
+
+(defun eclaw--grep-via-elisp (root-abs pattern glob-str lim-m lim-f lim-l)
+  "Search under ROOT-ABS using directory walk and literal substring match."
+  (let* ((regexp (regexp-quote pattern))
+         (glob-re (unless (string-empty-p glob-str)
+                    (wildcard-to-regexp glob-str)))
+         (match-lines nil)
+         (match-count 0)
+         (scan-count 0)
+         (truncated-files nil)
+         (truncated-matches nil))
+    (catch 'eclaw-grep-done
+      (dolist (file (directory-files-recursively root-abs "." nil t nil))
+        (when (>= scan-count lim-f)
+          (setq truncated-files t)
+          (throw 'eclaw-grep-done nil))
+        (setq scan-count (1+ scan-count))
+        (when (and (file-regular-p file)
+                   (not (eclaw--path-sensitive-p file))
+                   (or (null glob-re)
+                       (string-match-p glob-re (file-name-nondirectory file))))
+          (let* ((attrs (file-attributes file))
+                 (size (and attrs
+                            (if (fboundp 'file-attribute-size)
+                                (file-attribute-size attrs)
+                              (nth 7 attrs)))))
+            (when (and size (<= size eclaw-grep-max-file-bytes))
+              (condition-case nil
+                  (with-temp-buffer
+                    (insert-file-contents-literally file)
+                    (goto-char (point-min))
+                    (while (and (< match-count lim-m) (not (eobp)))
+                      (let* ((ln (line-number-at-pos))
+                             (beg (line-beginning-position))
+                             (end (line-end-position))
+                             (line (buffer-substring-no-properties beg end)))
+                        (forward-line 1)
+                        (when (string-match-p regexp line)
+                          (setq match-count (1+ match-count))
+                          (push (format "%s:%d:%s"
+                                        file ln
+                                        (eclaw--truncate-string line lim-l))
+                                match-lines)
+                          (when (>= match-count lim-m)
+                            (setq truncated-matches t)
+                            (throw 'eclaw-grep-done nil))))))
+                (error nil)))))))
+    (eclaw--grep-format-results (nreverse match-lines) lim-m lim-f
+                                truncated-matches truncated-files)))
 
 (eclaw-deftool grep_files
   "Search text files under a directory for a literal substring (not a regexp)."
@@ -930,12 +1042,14 @@ produces a normal reply or `eclaw-max-completions-per-prompt' or
 When a limit fires, the result string describes the stop reason and the
 conversation is left in a valid shape for the next user message.
 
-Otherwise, for a reply without tools, behavior matches
-`eclaw-update-conversation'.  Each HTTP exchange is logged."
-  (let ((messages (eclaw-build-messages prompt))
+The user turn is appended to `eclaw-conversation' before the first
+request so history matches what was sent even when a request fails.
+Each HTTP exchange is logged."
+  (setq eclaw-conversation
+        (nconc eclaw-conversation (list (eclaw-user-message prompt))))
+  (let ((messages (eclaw-build-messages))
         (total-tokens 0)
-        (completions 0)
-        (user-appended nil))
+        (completions 0))
     (catch 'eclaw-chat-done
       (while t
         (when (>= completions eclaw-max-completions-per-prompt)
@@ -966,19 +1080,14 @@ Otherwise, for a reply without tools, behavior matches
                             " total_tokens)"))))
             (if has-tools
                 (progn
-                  (if user-appended
-                      (setq eclaw-conversation
-                            (nconc eclaw-conversation
-                                   (cons assistant-msg
-                                         (eclaw--tool-result-messages
-                                          tool-calls synth-reason))))
-                    (setq eclaw-conversation
-                          (nconc eclaw-conversation
-                                 (nconc (list (eclaw-user-message prompt)
-                                              assistant-msg)
-                                        (eclaw--tool-result-messages
-                                         tool-calls synth-reason))))
-                    (setq user-appended t))
+                  (unless assistant-msg
+                    (error "eclaw: assistant message missing despite tool_calls"))
+                  (setq eclaw-conversation
+                        (nconc eclaw-conversation
+                               (cons (eclaw--normalize-assistant-message
+                                      assistant-msg)
+                                     (eclaw--tool-result-messages
+                                      tool-calls synth-reason))))
                   (when over-tokens
                     (let ((note (concat "[eclaw: turn stopped — "
                                         synth-reason "]")))
@@ -987,32 +1096,15 @@ Otherwise, for a reply without tools, behavior matches
                             (nconc eclaw-conversation
                                    (list (eclaw-assistant-message note))))
                       (throw 'eclaw-chat-done note)))
-                  (setq messages (eclaw-build-messages-continuation)))
+                  (setq messages (eclaw-build-messages)))
               (let ((content (or (eclaw-get-content response) "")))
                 (when over-tokens
                   (setq content
                         (concat content
                                 "\n\n[eclaw: cumulative token limit for this prompt exceeded]"))
                   (message "eclaw: token limit exceeded for this prompt"))
-                (if user-appended
-                    (progn
-                      (setq eclaw-conversation
-                            (nconc eclaw-conversation
-                                   (list (eclaw-assistant-message content))))
-                      (throw 'eclaw-chat-done content))
-                  (eclaw-update-conversation prompt content)
-                  (throw 'eclaw-chat-done content))))))))))
-
-(defun eclaw-update-conversation (prompt content)
-  "Append PROMPT and assistant CONTENT to `eclaw-conversation'.
-CONTENT may be nil; it is stored as an empty string.  Used for plain
-(non-tool) replies after the model responds."
-  (setq eclaw-conversation
-        (nconc
-         eclaw-conversation
-         (list
-          (eclaw-user-message prompt)
-          (eclaw-assistant-message (or content ""))))))
+                (eclaw-append-assistant-reply content)
+                (throw 'eclaw-chat-done content)))))))))
 
 ;;; Response buffer parsing
 
@@ -1081,8 +1173,11 @@ This is the assistant message object (text and/or `tool_calls')."
 
 (defun eclaw-get-content (response)
   "From RESPONSE, return the assistant's string `content', or nil.
-Nil is normal when the model issued `tool_calls' instead of text."
-  (alist-get 'content (eclaw-get-message response)))
+Nil is normal when the model issued `tool_calls' instead of text.
+When `content' is empty, fall back to `reasoning' if present."
+  (let ((msg (eclaw-get-message response)))
+    (or (alist-get 'content msg)
+        (alist-get 'reasoning msg))))
 
 (defun eclaw-get-tool-calls (response)
   "From RESPONSE, return the assistant's `tool_calls' list or nil.
@@ -1106,19 +1201,30 @@ Useful when debugging why a completion stopped (e.g. `stop', `tool_calls')."
 
 (defun eclaw-agent-chat (prompt)
   "Prompt for PROMPT, call `eclaw-chat', append exchange to buffer `*eclaw*'.
+The user turn is written to `*eclaw*' before the (possibly multi-round)
+HTTP exchange so follow-up prompts are visible while tools run.
+
 PROMPT is read interactively when called as a command."
   (interactive "sPrompt: ")
-  (let ((response (eclaw-chat prompt)))
-    (with-current-buffer (get-buffer-create "*eclaw*")
+  (let ((buf (get-buffer-create "*eclaw*")))
+    (with-current-buffer buf
+      (markdown-mode)
+      (view-mode -1)
       (goto-char (point-max))
-
       (insert "\n\nYou:\n")
       (insert prompt)
-      
       (insert "\n\nAssistant:\n")
-      (insert response)
-
-      (display-buffer (current-buffer)))))
+      (view-mode 1)
+      (display-buffer (current-buffer)))
+    (condition-case err
+        (with-current-buffer buf
+          (insert (eclaw-chat prompt))
+          (display-buffer (current-buffer)))
+      (error
+       (with-current-buffer buf
+         (insert (format "Error: %s" (error-message-string err)))
+         (display-buffer (current-buffer)))
+       (signal (car err) (cdr err))))))
 
 (defun eclaw-explain-buffer ()
   "Send the current buffer's text as code to be explained via `eclaw-agent-chat'."
