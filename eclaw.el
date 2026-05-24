@@ -1,4 +1,4 @@
-;;; eclaw.el --- Experimental AI agent
+;;; eclaw.el --- Personal AI assistant for Emacs
 
 ;; Copyright (C) 2026-2026  Mathias Dahl
 
@@ -27,31 +27,41 @@
 
 ;;; Commentary:
 ;;
-;; eclaw is a small, synchronous chat client for the OpenRouter chat
-;; completions API (`https://openrouter.ai/api/v1/chat/completions').
+;; eclaw is a personal AI assistant.  The primary use is general help
+;; (research, writing, planning, organization, and coding when needed).
+;; This file is the Emacs implementation: a synchronous orchestration runtime
+;; for the OpenRouter chat completions API
+;; (`https://openrouter.ai/api/v1/chat/completions').
 ;; It maintains one global conversation as a list of request/response
-;; messages and optionally advertises filesystem tools (`read_file',
+;; messages and optionally advertises local project tools (`read_file',
 ;; `list_directory', `grep_files') guarded by a sensitive-path policy,
 ;; plus narrow writes (`notes_write_text', `skill_write') limited to
 ;; `notes/*.txt' and `.eclaw/skills/<name>/SKILL.md' under the `.eclaw' root.
 ;; `grep_files' prefers `eclaw-grep-program' (GNU grep or ripgrep) with an
 ;; Elisp fallback; search is exhaustive under the given root (not gitignore-aware).
 ;;
-;; Layers (all in this file; transport is not yet split out):
+;; Longer term, the same assistant may run on a personal web site in the
+;; cloud—with utilities and durable data stored there—while Emacs remains
+;; one client/runtime.
+;;
+;; Layers (all in this file; transport is a distinct logical section):
 ;;
 ;; - Configuration: API key, model id, system prompt; tools via `eclaw-deftool';
 ;;   sensitive-path defaults via `eclaw-sensitive-path-prefixes' /
 ;;   `eclaw-sensitive-path-files'.
 ;; - Message builders: alists shaped like OpenAI chat messages; serialized
 ;;   with `json-encode' (symbol keys, vectors for `messages' array).
-;; - HTTP: `url-retrieve-synchronously' plus strict parsing in
-;;   `eclaw-get-response' (status check, JSON `error' field).
+;; - HTTP transport: `eclaw-build-chat-payload', `eclaw-post-completion-request',
+;;   `eclaw-get-response', and response accessors—no
+;;   conversation mutation or logging.  All POSTs go through `eclaw--http-post'
+;;   (unibyte UTF-8 encoding; see `docs/http-transport.md').
 ;; - Orchestration: `eclaw-chat' loops completions until the assistant returns
 ;;   without `tool_calls', or a cap is reached (`eclaw-max-completions-per-prompt',
 ;;   `eclaw-max-tokens-per-prompt').  Each assistant message may request multiple
 ;;   tools; every call is executed and a matching `role: tool' row is appended.
 ;; - UI: `eclaw-agent-chat' appends to buffer `*eclaw*'; logging writes
-;;   JSON lines to `eclaw-agent-log-file'.
+;;   JSON lines to `eclaw-agent-log-file'; conversation archives write
+;;   Markdown files to `eclaw-conversation-archive-dir' (on reset or manual save).
 ;;
 ;; Conversation state (`eclaw-conversation') is the canonical execution
 ;; trace: user, assistant, and tool messages only (no system row).  Each
@@ -91,13 +101,18 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
 
 (defvar eclaw-system-prompt
   (concat
-   "You are eclaw, an Emacs-native AI coding assistant. "
-   "You help users write, understand, debug, and refactor code inside Emacs. "
-   "Be concise, technically accurate, and practical. "
-   "Prefer clear explanations and incremental changes.\n\n"
+   "You are eclaw, a personal AI assistant. "
+   "You help with a wide range of tasks—research, writing, planning, "
+   "organization, and coding when the user asks. "
+   "Be concise, accurate, and practical. "
+   "Match the user's tone and depth; prefer clear explanations and "
+   "incremental steps for technical work.\n\n"
+   "You are running inside Emacs. When the user needs project or code "
+   "context, use the available read/search tools. "
    "When the user wants durable notes, use `notes_write_text' to create or update "
    "only `.txt' files under the project's `notes/' directory (paths are relative to "
-   "`notes/`). When guidance should persist as reusable agent instructions, use "
+   "`notes/`; the tool prepends `YYYY-MM-DD_HHMMSS-' to the file name). When guidance "
+   "should persist as reusable agent instructions, use "
    "`skill_write' to add or replace `.eclaw/skills/<skill_dir>/SKILL.md' "
    "(skill_dir uses only letters, digits, hyphen, underscore; max length 64). "
    "Both tools apply only under the project directory that contains `.eclaw'.")
@@ -220,7 +235,7 @@ Return plist (:name :description :path).  DEFAULT-DIR-NAME is used when
         (when (and (file-directory-p sub) (file-exists-p md))
           (condition-case err
               (push (eclaw--parse-skill-md md entry) out)
-            (error (message "eclaw: skipping skill %S: %S" md err))))))
+            (error (eclaw-debug-message "eclaw: skipping skill %S: %S" md err))))))
     (sort out (lambda (a b)
                 (string-lessp (plist-get a :name) (plist-get b :name))))))
 
@@ -245,7 +260,7 @@ project root (`eclaw--skills-project-root').  List is sorted by name."
                            (eclaw--skills-collect-from-directory skills-dir)))
                  (plist (list :root root :signature sig :skills skills)))
             (setq eclaw--skills-cache plist)
-            (message
+            (eclaw-debug-message
              "eclaw: project skills index %s (%d skill%s)"
              (if skills "loaded" "empty")
              (length skills)
@@ -273,6 +288,37 @@ project root (`eclaw--skills-project-root').  List is sorted by name."
 
 ;;; Conversation and message alists
 
+(defgroup eclaw nil
+  "Personal AI assistant for Emacs (OpenRouter-backed orchestration runtime)."
+  :group 'external)
+
+(defcustom eclaw-data-dir
+  (expand-file-name "~/.eclaw/")
+  "Directory under the user's home for eclaw data (archives, logs, etc.)."
+  :type 'directory
+  :group 'eclaw)
+
+(defcustom eclaw-conversation-archive-dir
+  (expand-file-name "conversations/" (expand-file-name eclaw-data-dir))
+  "Directory for Markdown conversation archives written by `eclaw-archive-current-conversation'."
+  :type 'directory
+  :group 'eclaw)
+
+(defcustom eclaw-archive-include-tools t
+  "When non-nil, append a collapsible tool-activity section to archived conversations."
+  :type 'boolean
+  :group 'eclaw)
+
+(defcustom eclaw-archive-clear-buffer-on-reset t
+  "When non-nil, erase buffer `*eclaw*' after archiving during `eclaw-reset-conversation'."
+  :type 'boolean
+  :group 'eclaw)
+
+(defcustom eclaw-archive-on-kill-emacs nil
+  "When non-nil, archive a non-empty session when Emacs exits."
+  :type 'boolean
+  :group 'eclaw)
+
 (defvar eclaw-conversation nil
   "Canonical chat history for the active session, excluding system.
 Each element is an alist: user (`role' user, `content'), assistant
@@ -281,10 +327,159 @@ API), or tool (`role' tool, `tool_call_id', `content').  The current
 user turn is appended at the start of `eclaw-chat' before any request.
 Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
+(defvar eclaw--session-started nil
+  "Start time of the current archivable session, or nil after reset.")
+
+(defvar eclaw--session-project nil
+  "`default-directory' at session start, stored as an absolute path.")
+
+(defun eclaw--conversation-turn-count ()
+  "Return the number of user turns in `eclaw-conversation'."
+  (length
+   (seq-filter
+    (lambda (msg) (equal (alist-get 'role msg) "user"))
+    (or eclaw-conversation '()))))
+
+(defun eclaw--conversation-first-prompt ()
+  "Return content of the first user message in `eclaw-conversation', or nil."
+  (let ((msg (seq-find (lambda (m) (equal (alist-get 'role m) "user"))
+                       eclaw-conversation)))
+    (when msg (alist-get 'content msg))))
+
+(defun eclaw--session-has-content-p ()
+  "Non-nil when the current session has content worth archiving."
+  (or (and (get-buffer "*eclaw*")
+           (with-current-buffer (get-buffer "*eclaw*")
+             (string-match-p "[^[:space:]]" (buffer-string))))
+      (and eclaw-conversation (> (length eclaw-conversation) 0))))
+
+(defun eclaw--conversation-slug (prompt)
+  "Return a filename slug derived from user PROMPT, or nil when empty."
+  (when (and prompt (not (string-empty-p (string-trim prompt))))
+    (let* ((s (downcase (string-trim prompt)))
+           (s (replace-regexp-in-string "[^a-z0-9]+" "-" s))
+           (s (string-trim s "-")))
+      (when (> (length s) 40)
+        (setq s (substring s 0 40)))
+      (unless (string-empty-p s) s))))
+
+(defun eclaw--conversation-archive-path (time slug)
+  "Return absolute archive file path for TIME and optional SLUG."
+  (let* ((dir (expand-file-name eclaw-conversation-archive-dir))
+         (stamp (format-time-string "%Y-%m-%d_%H%M%S" time))
+         (name (if (and slug (not (string-empty-p slug)))
+                   (format "%s_%s.md" stamp slug)
+                 (format "%s.md" stamp))))
+    (expand-file-name name dir)))
+
+(defun eclaw--conversation-render-transcript ()
+  "Return transcript text from `*eclaw*', or render from `eclaw-conversation'."
+  (if-let ((buf (get-buffer "*eclaw*")))
+      (with-current-buffer buf
+        (string-trim (buffer-string)))
+    (mapconcat
+     (lambda (msg)
+       (pcase (alist-get 'role msg)
+         ("user"
+          (concat "\n\nYou:\n" (or (alist-get 'content msg) "")))
+         ("assistant"
+          (let ((content (alist-get 'content msg)))
+            (when (and content (not (string-empty-p content)))
+              (concat "\n\nAssistant:\n" content))))
+         (_ nil)))
+     (or eclaw-conversation '())
+     "")))
+
+(defun eclaw--conversation-render-one-tool-call (tool-call)
+  "Return one markdown bullet for TOOL-CALL alist."
+  (let* ((fn-spec (alist-get 'function tool-call))
+         (name (or (alist-get 'name fn-spec) "unknown"))
+         (args (string-trim (or (alist-get 'arguments fn-spec) ""))))
+    (if (or (string-empty-p args) (string-equal args "{}"))
+        (format "- **%s**" name)
+      (let ((max 120))
+        (if (> (length args) max)
+            (format "- **%s** `%s…`" name (substring args 0 max))
+          (format "- **%s** `%s`" name args))))))
+
+(defun eclaw--conversation-render-tools ()
+  "Return a collapsible markdown appendix for tool rounds in `eclaw-conversation'."
+  (when (and eclaw-archive-include-tools eclaw-conversation)
+    (let ((rounds nil)
+          (round 0))
+      (dolist (msg eclaw-conversation)
+        (when (and (equal (alist-get 'role msg) "assistant")
+                   (alist-get 'tool_calls msg))
+          (setq round (1+ round))
+          (push
+           (concat "### Tool round " (number-to-string round) "\n"
+                   (mapconcat #'eclaw--conversation-render-one-tool-call
+                              (alist-get 'tool_calls msg)
+                              "\n"))
+           rounds)))
+      (when rounds
+        (concat "\n\n<details>\n<summary>Tool activity</summary>\n\n"
+                (mapconcat #'identity (nreverse rounds) "\n\n")
+                "\n\n</details>\n")))))
+
+(defun eclaw--conversation-archive-frontmatter (ended-time)
+  "Return YAML frontmatter for an archive ending at ENDED-TIME."
+  (format
+   "---\nid: %s\nstarted: %s\nended: %s\nmodel: %s\nproject: %s\nturns: %s\nsource: eclaw-archive\n---\n\n"
+   (format-time-string "%Y-%m-%dT%H:%M:%S%z" ended-time)
+   (if eclaw--session-started
+       (format-time-string "%Y-%m-%dT%H:%M:%S%z" eclaw--session-started)
+     "")
+   (format-time-string "%Y-%m-%dT%H:%M:%S%z" ended-time)
+   eclaw-model
+   (or eclaw--session-project (expand-file-name default-directory))
+   (eclaw--conversation-turn-count)))
+
+(defun eclaw-archive-current-conversation ()
+  "Save the current session to a Markdown file under `eclaw-conversation-archive-dir'.
+Return the written file path, or nil when there is nothing to archive."
+  (when (eclaw--session-has-content-p)
+    (let* ((ended (current-time))
+           (path (eclaw--conversation-archive-path
+                  ended
+                  (eclaw--conversation-slug (eclaw--conversation-first-prompt))))
+           (dir (file-name-directory path))
+           (transcript (eclaw--conversation-render-transcript))
+           (tools (or (eclaw--conversation-render-tools) ""))
+           (content (concat (eclaw--conversation-archive-frontmatter ended)
+                            transcript
+                            tools)))
+      (make-directory dir t)
+      (with-temp-file path
+        (insert content))
+      path)))
+
+(defun eclaw--clear-eclaw-buffer ()
+  "Erase buffer `*eclaw*' when it exists, preserving View mode."
+  (when-let ((buf (get-buffer "*eclaw*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (when view-mode (view-mode -1))
+        (erase-buffer)
+        (view-mode 1)))))
+
 (defun eclaw-reset-conversation ()
-  "Clear `eclaw-conversation' and confirm in the echo area."
+  "Archive the current session, clear `eclaw-conversation', and start fresh.
+When archiving fails, the session is left unchanged."
   (interactive)
+  (when (eclaw--session-has-content-p)
+    (condition-case err
+        (let ((path (eclaw-archive-current-conversation)))
+          (unless path
+            (user-error "Archive produced no file"))
+          (message "eclaw: conversation archived to %s" path))
+      (error
+       (user-error "Archive failed: %s" (error-message-string err)))))
   (setq eclaw-conversation nil)
+  (setq eclaw--session-started nil)
+  (setq eclaw--session-project nil)
+  (when eclaw-archive-clear-buffer-on-reset
+    (eclaw--clear-eclaw-buffer))
   (message "eclaw conversation reset"))
 
 (defun eclaw-system-message ()
@@ -313,7 +508,7 @@ When the current `default-directory' is under a project with
 (defun eclaw-build-messages ()
   "Build the outgoing message list from canonical `eclaw-conversation'.
 Returns [system] + conversation as a flat list suitable for
-`eclaw--chat-request-payload'.  The conversation must already include
+`eclaw-build-chat-payload'.  The conversation must already include
 the current user turn (and any in-flight assistant/tool rows)."
   (append (list (eclaw-system-message)) eclaw-conversation nil))
 
@@ -344,9 +539,25 @@ Populated by `eclaw-deftool'.")
   "When non-nil, include registered tools in outgoing chat requests.
 When nil, behave like text-only completions regardless of registry contents.")
 
-(defgroup eclaw nil
-  "Emacs-native OpenRouter chat agent."
-  :group 'external)
+(defcustom eclaw-debug nil
+  "When non-nil, emit verbose eclaw progress in the echo area.
+Includes HTTP request notices, token usage, project skills index reloads,
+and tool side-effect details.  Tool dispatch lines and cap/limit notices
+are always shown."
+  :type 'boolean
+  :group 'eclaw)
+
+(defun eclaw-debug-message (format-string &rest args)
+  "Like `message' when `eclaw-debug' is non-nil; otherwise no-op."
+  (when eclaw-debug
+    (apply #'message format-string args)))
+
+;;;###autoload
+(defun eclaw-toggle-debug ()
+  "Toggle `eclaw-debug' and report the new state in the echo area."
+  (interactive)
+  (setq eclaw-debug (not eclaw-debug))
+  (message "eclaw debug %s" (if eclaw-debug "on" "off")))
 
 (defcustom eclaw-sensitive-path-prefixes
   '("~/.ssh/" "~/.gnupg/" "~/.aws/" "~/.azure/" "~/.kube/")
@@ -448,13 +659,28 @@ directory with or without a trailing slash."
        (<= (length name) 64)
        (string-match-p "\\`[A-Za-z0-9_-]+\\'" name)))
 
+(defconst eclaw-notes-filename-timestamp-regexp
+  "\\`[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]-"
+  "Regexp matching the date-time prefix prepended to notes file names.")
+
+(defun eclaw--notes-relative-path-with-timestamp (relative-path)
+  "Return RELATIVE-PATH with `YYYY-MM-DD_HHMMSS-' prefixed to the basename if missing."
+  (let* ((dir (file-name-directory relative-path))
+         (base (file-name-nondirectory relative-path)))
+    (if (string-match-p eclaw-notes-filename-timestamp-regexp base)
+        relative-path
+      (let ((prefixed (concat (format-time-string "%Y-%m-%d_%H%M%S") "-" base)))
+        (if dir (concat dir prefixed) prefixed)))))
+
 (defun eclaw-tool-notes-write-text (relative-path content append-p)
   "Write CONTENT to RELATIVE-PATH under `<root>/notes/'.
 Create parent directories when missing.  With non-nil APPEND-P, append to an
 existing regular file.  Path must end with `.txt' (any case) and resolve under
-`notes/'.  Return a status string."
+`notes/'.  A `YYYY-MM-DD_HHMMSS-' prefix is added to the basename when absent.
+Return a status string."
   (let* ((root (eclaw--project-root-for-eclaw-writes))
-         (rel (string-trim (or relative-path "")))
+         (rel (eclaw--notes-relative-path-with-timestamp
+               (string-trim (or relative-path ""))))
          (text (or content "")))
     (cond
      ((null root)
@@ -488,7 +714,7 @@ existing regular file.  Path must end with `.txt' (any case) and resolve under
                     (insert-file-contents-literally target))
                   (insert text)
                   (write-region (point-min) (point-max) target nil 'nomessage))
-                (message "eclaw: notes_write_text %s `%s`"
+                (eclaw-debug-message "eclaw: notes_write_text %s `%s`"
                          (if append-p "appended to" "wrote") target)
                 (format "Notes %s `%s`."
                         (if append-p "appended to" "saved")
@@ -539,7 +765,7 @@ Return a status string."
                   (insert text)
                   (write-region (point-min) (point-max) target nil 'nomessage))
                 (eclaw--invalidate-skills-cache)
-                (message "eclaw: skill_write updated %s" target)
+                (eclaw-debug-message "eclaw: skill_write updated %s" target)
                 (format "Skill saved as `.eclaw/skills/%s/SKILL.md`." skill-dir))
             (error (format "Error writing skill file %S: %S" target err))))))))))
 
@@ -644,36 +870,6 @@ to nil for text-only requests."
                 out)))
       (nreverse out))))
 
-;;; HTTP request construction and transport
-
-(defun eclaw--chat-request-payload (messages)
-  "Return the JSON-serializable request alist for message list MESSAGES.
-MESSAGES must be a list of message alists; it is stored under key `messages'
-as a vector.  Adds `tools' when `eclaw-tool-definitions' returns non-nil."
-  (let ((base `((model . ,eclaw-model)
-               (messages . ,(vconcat messages))))
-        (tools (eclaw-tool-definitions)))
-    (if tools
-        (append base `((tools . ,tools)))
-      base)))
-
-(defun eclaw--post-chat-completion (request-payload)
-  "POST REQUEST-PAYLOAD to OpenRouter and return the parsed JSON alist.
-Announces progress in the echo area, then blocks until
-`url-retrieve-synchronously' completes.  Delegates body handling to
-`eclaw-get-response'."
-  (message "eclaw: contacting OpenRouter…")
-  (redisplay t)
-  (let ((url-request-method "POST")
-        (url-request-extra-headers
-         `(("Authorization" . ,(concat "Bearer " (eclaw-get-api-key)))
-           ("Content-Type" . "application/json")))
-        (url-request-data
-         (encode-coding-string (json-encode request-payload) 'utf-8)))
-    (eclaw-get-response
-     (url-retrieve-synchronously
-      "https://openrouter.ai/api/v1/chat/completions"))))
-
 ;;; Tool execution
 
 (defun eclaw-tool-read-file (path)
@@ -697,7 +893,7 @@ human-readable description instead of signaling."
       (progn
         (when (and (not (eclaw--path-sensitive-p path))
                    (eclaw--path-is-project-skill-md-p path))
-          (message "eclaw: skill file read (model loaded skill): %s"
+          (eclaw-debug-message "eclaw: skill file read (model loaded skill): %s"
                    (expand-file-name path)))
         (eclaw-tool-read-file path))
     "Error: read_file requires \"path\" in arguments."))
@@ -951,9 +1147,10 @@ Return (MATCH-LINES TRUNCATED-MATCHES-P)."
     "Error: grep_files requires \"root\" in arguments."))
 
 (eclaw-deftool notes_write_text
-  "Write a `.txt` under the project `notes/` directory (create or append)."
+  "Write a `.txt` under the project `notes/` directory (create or append).
+Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already present."
   ((relative_path :string
-                  "Path relative to notes/ (not absolute); must end with .txt.")
+                  "Path relative to notes/ (not absolute); must end with .txt. A YYYY-MM-DD_HHMMSS- prefix is added to the basename automatically.")
    (content :string "Full file body to write (UTF-8).")
    (append :boolean
            "When true, append to an existing file instead of overwriting."
@@ -1018,6 +1215,143 @@ When SYNTH-REASON is non-nil, do not run handlers; use it in the abort text."
           (eclaw--dispatch-one-tool-call tc)))))
    tool-calls))
 
+;;; HTTP transport
+
+(defun eclaw--utf8-unibyte-string (string)
+  "Return STRING as unibyte UTF-8 bytes for HTTP headers or body.
+Emacs `url' rejects multibyte text in outgoing requests; JSON payloads and
+header values (including `getenv' results) are often multibyte even when ASCII."
+  (encode-coding-string (or string "") 'utf-8))
+
+(defun eclaw--http-unibyte-headers (headers)
+  "Return HEADERS alist with each value encoded as unibyte UTF-8."
+  (mapcar (lambda (pair)
+            (cons (car pair)
+                  (eclaw--utf8-unibyte-string (cdr pair))))
+          headers))
+
+(defun eclaw--assert-http-unibyte-p (body &optional headers)
+  "Signal an internal error when BODY or header values are not unibyte.
+Guards against regressions: all outgoing HTTP must go through `eclaw--http-post'."
+  (unless (and body (not (multibyte-string-p body)))
+    (error "eclaw internal error: HTTP body must be unibyte UTF-8"))
+  (dolist (pair headers)
+    (unless (and (cdr pair) (not (multibyte-string-p (cdr pair))))
+      (error "eclaw internal error: HTTP header %S must be unibyte UTF-8"
+             (car pair)))))
+
+(defun eclaw--http-post (url headers body)
+  "POST BODY (any string) to URL with HEADERS alist; return response buffer.
+This is the only function that sets `url-request-method', `url-request-data',
+and `url-request-extra-headers'.  Headers and body are encoded as unibyte UTF-8
+before calling `url-retrieve-synchronously'.  See `docs/http-transport.md'."
+  (let* ((headers (eclaw--http-unibyte-headers headers))
+         (body-bytes (eclaw--utf8-unibyte-string body))
+         (url-request-method "POST")
+         (url-request-extra-headers headers)
+         (url-request-data body-bytes))
+    (eclaw--assert-http-unibyte-p body-bytes headers)
+    (url-retrieve-synchronously url)))
+
+(defun eclaw-build-chat-payload (messages)
+  "Return the JSON-serializable request alist for message list MESSAGES.
+MESSAGES must be a list of message alists; it is stored under key `messages'
+as a vector.  Adds `tools' when `eclaw-tool-definitions' returns non-nil."
+  (let ((base `((model . ,eclaw-model)
+               (messages . ,(vconcat messages))))
+        (tools (eclaw-tool-definitions)))
+    (if tools
+        (append base `((tools . ,tools)))
+      base)))
+
+(defun eclaw-post-completion-request (payload)
+  "POST PAYLOAD to OpenRouter chat completions; return parsed JSON alist.
+Announces progress in the echo area, then blocks until
+`url-retrieve-synchronously' completes.  Signals on HTTP or API errors via
+`eclaw-get-response'.  Does not mutate conversation state or log."
+  (when eclaw-debug
+    (eclaw-debug-message "eclaw: contacting OpenRouter…")
+    (redisplay t))
+  (eclaw-get-response
+   (eclaw--http-post
+    "https://openrouter.ai/api/v1/chat/completions"
+    `(("Authorization" . ,(concat "Bearer " (eclaw-get-api-key)))
+      ("Content-Type" . "application/json; charset=utf-8"))
+    (json-encode payload))))
+
+(defun eclaw--response-error-body (buffer)
+  "Return the UTF-8-decoded HTTP body of BUFFER after the headers.
+Assumes `url-http-end-of-headers' is set in BUFFER (from `url')."
+  (with-current-buffer buffer
+    (goto-char url-http-end-of-headers)
+    (set-buffer-multibyte t)
+    (decode-coding-region (point) (point-max) 'utf-8)
+    (buffer-substring-no-properties (point) (point-max))))
+
+(defun eclaw-get-response (buffer)
+  "Parse the JSON chat completion object from BUFFER, then kill BUFFER.
+Signals an error if BUFFER is nil (failed retrieve), if HTTP status is
+outside 2xx, or if the parsed JSON includes a top-level `error' entry.
+On success returns an alist with symbol keys (`json-read' settings)."
+  (unless buffer
+    ;; `url-retrieve-synchronously' returns nil when the retrieve failed.
+    (error "eclaw: request failed before a response was available"))
+  (with-current-buffer buffer
+    (let ((status (or url-http-response-status -1)))
+      (unless (and (integerp status) (<= 200 status 299))
+        (let ((body (eclaw--response-error-body buffer)))
+          (kill-buffer buffer)
+          (error "eclaw: HTTP %s from OpenRouter:\n%s"
+                 status
+                 (if (> (length body) 500)
+                     (concat (substring body 0 500) "…")
+                   body)))))
+    (goto-char url-http-end-of-headers)
+    (set-buffer-multibyte t)
+    (decode-coding-region (point) (point-max) 'utf-8)
+    (let* ((json-object-type 'alist)
+           (json-array-type 'list)
+           (json-key-type 'symbol)
+           (response (json-read)))
+      (kill-buffer buffer)
+      (when-let ((err (alist-get 'error response)))
+        (error "eclaw: OpenRouter error in JSON body: %S" err))
+      response)))
+
+(defun eclaw-get-first-choice (response)
+  "From parsed completion RESPONSE, return `choices[0]' alist or nil.
+RESPONSE is the alist returned by `eclaw-get-response'."
+  (let ((choices (alist-get 'choices response)))
+    (when choices
+      (elt choices 0))))
+
+(defun eclaw-get-message (response)
+  "From RESPONSE, return the nested `message' alist inside first choice.
+This is the assistant message object (text and/or `tool_calls')."
+  (alist-get 'message (eclaw-get-first-choice response)))
+
+(defun eclaw-get-content (response)
+  "From RESPONSE, return the assistant's string `content', or nil.
+Nil is normal when the model issued `tool_calls' instead of text.
+When `content' is empty, fall back to `reasoning' if present."
+  (let ((msg (eclaw-get-message response)))
+    (or (alist-get 'content msg)
+        (alist-get 'reasoning msg))))
+
+(defun eclaw-get-tool-calls (response)
+  "From RESPONSE, return the assistant's `tool_calls' list or nil.
+Each element follows the API tool-call shape (id, type, function, ...)."
+  (alist-get 'tool_calls (eclaw-get-message response)))
+
+(defun eclaw-get-finish-reason (response)
+  "From RESPONSE, return `finish_reason' for the first choice or nil.
+Useful when debugging why a completion stopped (e.g. `stop', `tool_calls')."
+  (alist-get 'finish_reason (eclaw-get-first-choice response)))
+
+(defun eclaw-extract-usage (response)
+  "Return the `usage' alist from parsed RESPONSE, or nil if absent."
+  (alist-get 'usage response))
+
 ;;; Orchestration
 
 (defvar eclaw-max-completions-per-prompt 32
@@ -1062,8 +1396,8 @@ Each HTTP exchange is logged."
                          (list (eclaw-assistant-message msg))))
             (throw 'eclaw-chat-done msg)))
         (setq completions (1+ completions))
-        (let* ((payload (eclaw--chat-request-payload messages))
-               (response (eclaw--post-chat-completion payload))
+        (let* ((payload (eclaw-build-chat-payload messages))
+               (response (eclaw-post-completion-request payload))
                (usage (alist-get 'usage response)))
           (eclaw-log payload response)
           (when usage (eclaw-report-usage usage))
@@ -1106,46 +1440,13 @@ Each HTTP exchange is logged."
                 (eclaw-append-assistant-reply content)
                 (throw 'eclaw-chat-done content)))))))))
 
-;;; Response buffer parsing
-
-(defun eclaw--response-error-body (buffer)
-  "Return the UTF-8-decoded HTTP body of BUFFER after the headers.
-Assumes `url-http-end-of-headers' is set in BUFFER (from `url')."
-  (with-current-buffer buffer
-    (goto-char url-http-end-of-headers)
-    (set-buffer-multibyte t)
-    (decode-coding-region (point) (point-max) 'utf-8)
-    (buffer-substring-no-properties (point) (point-max))))
-
-(defun eclaw-get-response (buffer)
-  "Parse the JSON chat completion object from BUFFER, then kill BUFFER.
-Signals an error if BUFFER is nil (failed retrieve), if HTTP status is
-outside 2xx, or if the parsed JSON includes a top-level `error' entry.
-On success returns an alist with symbol keys (`json-read' settings)."
-  (unless buffer
-    ;; `url-retrieve-synchronously' returns nil when the retrieve failed.
-    (error "eclaw: request failed before a response was available"))
-  (with-current-buffer buffer
-    (let ((status (or url-http-response-status -1)))
-      (unless (and (integerp status) (<= 200 status 299))
-        (let ((body (eclaw--response-error-body buffer)))
-          (kill-buffer buffer)
-          (error "eclaw: HTTP %s from OpenRouter:\n%s"
-                 status
-                 (if (> (length body) 500)
-                     (concat (substring body 0 500) "…")
-                   body)))))
-    (goto-char url-http-end-of-headers)
-    (set-buffer-multibyte t)
-    (decode-coding-region (point) (point-max) 'utf-8)
-    (let* ((json-object-type 'alist)
-           (json-array-type 'list)
-           (json-key-type 'symbol)
-           (response (json-read)))
-      (kill-buffer buffer)
-      (when-let ((err (alist-get 'error response)))
-        (error "eclaw: OpenRouter error in JSON body: %S" err))
-      response)))
+(defun eclaw-report-usage (usage)
+  "When `eclaw-debug' is non-nil, display token counts from USAGE in the echo area."
+  (eclaw-debug-message
+   "Prompt: %s  Completion: %s  Total: %s"
+   (alist-get 'prompt_tokens usage)
+   (alist-get 'completion_tokens usage)
+   (alist-get 'total_tokens usage)))
 
 ;;; Logging (each HTTP exchange)
 
@@ -1157,72 +1458,53 @@ On success returns an alist with symbol keys (`json-read' settings)."
      (request . ,request-payload)
      (response . ,response))))
 
-;;; Choice/message accessors (parsed completion alist)
-
-(defun eclaw-get-first-choice (response)
-  "From parsed completion RESPONSE, return `choices[0]' alist or nil.
-RESPONSE is the alist returned by `eclaw-get-response'."
-  (let ((choices (alist-get 'choices response)))
-    (when choices
-      (elt choices 0))))
-
-(defun eclaw-get-message (response)
-  "From RESPONSE, return the nested `message' alist inside first choice.
-This is the assistant message object (text and/or `tool_calls')."
-  (alist-get 'message (eclaw-get-first-choice response)))
-
-(defun eclaw-get-content (response)
-  "From RESPONSE, return the assistant's string `content', or nil.
-Nil is normal when the model issued `tool_calls' instead of text.
-When `content' is empty, fall back to `reasoning' if present."
-  (let ((msg (eclaw-get-message response)))
-    (or (alist-get 'content msg)
-        (alist-get 'reasoning msg))))
-
-(defun eclaw-get-tool-calls (response)
-  "From RESPONSE, return the assistant's `tool_calls' list or nil.
-Each element follows the API tool-call shape (id, type, function, ...)."
-  (alist-get 'tool_calls (eclaw-get-message response)))
-
-(defun eclaw-get-finish-reason (response)
-  "From RESPONSE, return `finish_reason' for the first choice or nil.
-Useful when debugging why a completion stopped (e.g. `stop', `tool_calls')."
-  (alist-get 'finish_reason (eclaw-get-first-choice response)))
-
-(defun eclaw-report-usage (usage)
-  "Display token counts from USAGE alist in the echo area."
-  (message
-   "Prompt: %s  Completion: %s  Total: %s"
-   (alist-get 'prompt_tokens usage)
-   (alist-get 'completion_tokens usage)
-   (alist-get 'total_tokens usage)))
-
 ;;; Interactive entry points
+
+(defun eclaw--eclaw-buffer-append (text)
+  "Append TEXT at point-max in `*eclaw*', then restore View mode.
+View mode blocks insertion; eclaw exits it briefly, appends, and turns it
+back on so the user keeps view-mode navigation for reading the transcript."
+  (let ((inhibit-read-only t))
+    (when view-mode (view-mode -1))
+    (goto-char (point-max))
+    (insert text)
+    (view-mode 1)))
+
+(defun eclaw--eclaw-buffer-setup ()
+  "Prepare the current buffer as the View-mode `*eclaw*' transcript."
+  (require 'markdown-mode nil t)
+  (if (fboundp 'markdown-mode)
+      (markdown-mode)
+    (text-mode))
+  (unless view-mode
+    (view-mode 1)))
 
 (defun eclaw-agent-chat (prompt)
   "Prompt for PROMPT, call `eclaw-chat', append exchange to buffer `*eclaw*'.
 The user turn is written to `*eclaw*' before the (possibly multi-round)
 HTTP exchange so follow-up prompts are visible while tools run.
 
+The transcript buffer uses View mode for reading; new content is appended
+by eclaw only.
+
 PROMPT is read interactively when called as a command."
   (interactive "sPrompt: ")
+  (unless eclaw--session-started
+    (setq eclaw--session-started (current-time))
+    (setq eclaw--session-project (expand-file-name default-directory)))
   (let ((buf (get-buffer-create "*eclaw*")))
     (with-current-buffer buf
-      (markdown-mode)
-      (view-mode -1)
-      (goto-char (point-max))
-      (insert "\n\nYou:\n")
-      (insert prompt)
-      (insert "\n\nAssistant:\n")
-      (view-mode 1)
+      (eclaw--eclaw-buffer-setup)
+      (eclaw--eclaw-buffer-append
+       (concat "\n\nYou:\n" prompt "\n\nAssistant:\n"))
       (display-buffer (current-buffer)))
     (condition-case err
         (with-current-buffer buf
-          (insert (eclaw-chat prompt))
+          (eclaw--eclaw-buffer-append (eclaw-chat prompt))
           (display-buffer (current-buffer)))
       (error
        (with-current-buffer buf
-         (insert (format "Error: %s" (error-message-string err)))
+         (eclaw--eclaw-buffer-append (format "Error: %s" (error-message-string err)))
          (display-buffer (current-buffer)))
        (signal (car err) (cdr err))))))
 
@@ -1234,14 +1516,83 @@ PROMPT is read interactively when called as a command."
     "Explain this code:\n\n"
     (buffer-string))))
 
+(defun eclaw-save-conversation ()
+  "Save the current eclaw session to a Markdown archive file."
+  (interactive)
+  (if (eclaw--session-has-content-p)
+      (condition-case err
+          (let ((path (eclaw-archive-current-conversation)))
+            (if path
+                (message "eclaw: conversation saved to %s" path)
+              (user-error "Archive produced no file")))
+        (error
+         (user-error "Archive failed: %s" (error-message-string err))))
+    (user-error "No conversation to save")))
+
+(defun eclaw--list-conversation-files ()
+  "Return archive `.md' files sorted newest first."
+  (let ((dir (expand-file-name eclaw-conversation-archive-dir)))
+    (when (file-directory-p dir)
+      (sort
+       (directory-files dir nil "\\`[^.].*\\.md\\'")
+       (lambda (a b)
+         (> (file-attribute-modification-time (file-attributes (expand-file-name a dir)))
+            (file-attribute-modification-time (file-attributes (expand-file-name b dir)))))))))
+
+(defun eclaw--conversation-file-label (file)
+  "Return a completion label for archive FILE."
+  (let* ((full (expand-file-name file eclaw-conversation-archive-dir))
+         (mtime (file-attribute-modification-time (file-attributes full)))
+         (stamp (when mtime (format-time-string "%Y-%m-%d %H:%M" mtime))))
+    (if stamp
+        (format "%s  %s" stamp (file-name-nondirectory file))
+      (file-name-nondirectory file))))
+
+(defun eclaw-open-conversation (&optional file)
+  "Open a saved conversation archive in a read-only markdown buffer."
+  (interactive
+   (let* ((dir (expand-file-name eclaw-conversation-archive-dir))
+          (files (eclaw--list-conversation-files))
+          (candidates
+           (mapcar (lambda (f)
+                     (cons (eclaw--conversation-file-label f) f))
+                   files)))
+     (unless files
+       (user-error "No conversation archives in %s" dir))
+     (list (completing-read "Conversation: " candidates nil t))))
+  (let ((path (expand-file-name file eclaw-conversation-archive-dir)))
+    (unless (file-readable-p path)
+      (user-error "Conversation file not readable: %s" path))
+    (find-file-read-only path)
+    (eclaw--eclaw-buffer-setup)))
+
+(defun eclaw-list-conversations ()
+  "Open `eclaw-conversation-archive-dir' in Dired."
+  (interactive)
+  (let ((dir (expand-file-name eclaw-conversation-archive-dir)))
+    (make-directory dir t)
+    (dired dir)))
+
+(defun eclaw--maybe-archive-on-kill-emacs ()
+  "Archive the current session on Emacs exit when configured."
+  (when (and eclaw-archive-on-kill-emacs (eclaw--session-has-content-p))
+    (condition-case nil
+        (eclaw-archive-current-conversation)
+      (error nil))))
+
+(add-hook 'kill-emacs-hook #'eclaw--maybe-archive-on-kill-emacs)
+
 ;;; JSONL log file
 
-(defvar eclaw-agent-log-file
-  (expand-file-name "~/.emacs.d/eclaw-log.jsonl")
-  "File path for JSONL log lines written by `eclaw-append-json-log'.")
+(defcustom eclaw-agent-log-file
+  (expand-file-name "eclaw-log.jsonl" (expand-file-name eclaw-data-dir))
+  "File path for JSONL log lines written by `eclaw-append-json-log'."
+  :type 'file
+  :group 'eclaw)
 
 (defun eclaw-append-json-log (data)
   "Append DATA, JSON-encoded, as one line to `eclaw-agent-log-file'."
+  (make-directory (file-name-directory (expand-file-name eclaw-agent-log-file)) t)
   (with-temp-buffer
     (insert
      (json-encode data))
@@ -1252,10 +1603,6 @@ PROMPT is read interactively when called as a command."
      (point-min)
      (point-max)
      eclaw-agent-log-file)))
-
-(defun eclaw-extract-usage (response)
-  "Return the `usage' alist from parsed RESPONSE, or nil if absent."
-  (alist-get 'usage response))
 
 (provide 'eclaw)
 ;;; eclaw.el ends here
