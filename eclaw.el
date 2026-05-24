@@ -34,11 +34,11 @@
 ;; (`https://openrouter.ai/api/v1/chat/completions').
 ;; It maintains one global conversation as a list of request/response
 ;; messages and optionally advertises local project tools (`read_file',
-;; `list_directory', `grep_files') guarded by a sensitive-path policy,
-;; plus narrow writes (`notes_write_text', `skill_write') limited to
+;; `list_directory', `glob_files', `grep_files') guarded by a sensitive-path
+;; policy, plus narrow writes (`notes_write_text', `skill_write') limited to
 ;; `notes/*.txt' and `.eclaw/skills/<name>/SKILL.md' under the `.eclaw' root.
-;; `grep_files' prefers `eclaw-grep-program' (GNU grep or ripgrep) with an
-;; Elisp fallback; search is exhaustive under the given root (not gitignore-aware).
+;; `glob_files' and `grep_files' use `eclaw-grep-program' (ripgrep preferred,
+;; GNU grep fallback); search respects `.gitignore' by default.
 ;;
 ;; Longer term, the same assistant may run on a personal web site in the
 ;; cloud—with utilities and durable data stored there—while Emacs remains
@@ -108,7 +108,11 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "Match the user's tone and depth; prefer clear explanations and "
    "incremental steps for technical work.\n\n"
    "You are running inside Emacs. When the user needs project or code "
-   "context, use the available read/search tools. "
+   "context, use `glob_files' to find files by name, `grep_files' to search "
+   "contents (default `output_mode' files_with_matches, then `read_file'), and "
+   "`list_directory' for a single directory listing. Patterns in `grep_files' "
+   "are ripgrep regexes; escape metacharacters when searching for literal text. "
+   "Use `include_ignored: true' only when gitignored or build output must be searched. "
    "When the user wants durable notes, use `notes_write_text' to create or update "
    "only `.txt' files under the project's `notes/' directory (paths are relative to "
    "`notes/`; the tool prepends `YYYY-MM-DD_HHMMSS-' to the file name). When guidance "
@@ -139,19 +143,6 @@ Keys are :root (string directory), :signature (string), :skills (list).")
 Uses `default-directory' as the starting point."
   (when-let ((dir (locate-dominating-file default-directory ".eclaw")))
     (directory-file-name (expand-file-name dir))))
-
-(defun eclaw--skills-signature-for-directory (skills-dir)
-  "Return a string that changes when any `SKILL.md' under SKILLS-DIR changes.
-If SKILLS-DIR is missing or not a directory, return an empty string."
-  (if (not (file-directory-p skills-dir))
-      ""
-    (let (parts)
-      (dolist (entry (directory-files skills-dir nil "^[^.]" t))
-        (let* ((sub (expand-file-name entry skills-dir))
-               (md (expand-file-name "SKILL.md" sub)))
-          (when (and (file-directory-p sub) (file-exists-p md))
-            (push (format "%s:%f" md (eclaw--file-mtime-float md)) parts))))
-      (mapconcat #'identity (sort parts #'string<) "|"))))
 
 (defun eclaw--skill-yaml-get (key beg end)
   "In the current buffer, read simple `KEY: value' line between BEG and END.
@@ -226,18 +217,24 @@ Return plist (:name :description :path).  DEFAULT-DIR-NAME is used when
           (setq hit t)))
       hit)))
 
-(defun eclaw--skills-collect-from-directory (skills-dir)
-  "Return sorted list of skill plists for subdirs of SKILLS-DIR that have SKILL.md."
-  (let (out)
-    (dolist (entry (directory-files skills-dir nil "^[^.]" t))
-      (let* ((sub (expand-file-name entry skills-dir))
-             (md (expand-file-name "SKILL.md" sub)))
-        (when (and (file-directory-p sub) (file-exists-p md))
-          (condition-case err
-              (push (eclaw--parse-skill-md md entry) out)
-            (error (eclaw-debug-message "eclaw: skipping skill %S: %S" md err))))))
-    (sort out (lambda (a b)
-                (string-lessp (plist-get a :name) (plist-get b :name))))))
+(defun eclaw--skills-load-from-directory (skills-dir)
+  "Scan SKILLS-DIR once; return plist (:signature :skills).
+:signature changes when any `SKILL.md' mtime changes; :skills is sorted by name."
+  (if (not (file-directory-p skills-dir))
+      (list :signature "" :skills nil)
+    (let (parts skills)
+      (dolist (entry (directory-files skills-dir nil "^[^.]" t))
+        (let* ((sub (expand-file-name entry skills-dir))
+               (md (expand-file-name "SKILL.md" sub)))
+          (when (and (file-directory-p sub) (file-exists-p md))
+            (push (format "%s:%f" md (eclaw--file-mtime-float md)) parts)
+            (condition-case err
+                (push (eclaw--parse-skill-md md entry) skills)
+              (error (eclaw-debug-message "eclaw: skipping skill %S: %S" md err))))))
+      (list :signature (mapconcat #'identity (sort parts #'string<) "|")
+            :skills (sort skills (lambda (a b)
+                                   (string-lessp (plist-get a :name)
+                                                 (plist-get b :name))))))))
 
 (defun eclaw--project-skills-index ()
   "Return cached list of project skill plists, or nil if none.
@@ -249,16 +246,15 @@ project root (`eclaw--skills-project-root').  List is sorted by name."
       nil)
      (t
       (let* ((skills-dir (expand-file-name "skills" (expand-file-name ".eclaw" root)))
-             (sig (eclaw--skills-signature-for-directory skills-dir))
+             (loaded (eclaw--skills-load-from-directory skills-dir))
+             (sig (plist-get loaded :signature))
              (cached eclaw--skills-cache))
         (if (and cached
                  (equal root (plist-get cached :root))
                  (equal sig (plist-get cached :signature)))
             (plist-get cached :skills)
-            (let* ((skills (if (string-empty-p sig)
-                             nil
-                           (eclaw--skills-collect-from-directory skills-dir)))
-                 (plist (list :root root :signature sig :skills skills)))
+            (let* ((skills (plist-get loaded :skills))
+                   (plist (list :root root :signature sig :skills skills)))
             (setq eclaw--skills-cache plist)
             (eclaw-debug-message
              "eclaw: project skills index %s (%d skill%s)"
@@ -373,22 +369,11 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
     (expand-file-name name dir)))
 
 (defun eclaw--conversation-render-transcript ()
-  "Return transcript text from `*eclaw*', or render from `eclaw-conversation'."
+  "Return transcript text from buffer `*eclaw*', or \"\" if the buffer is missing."
   (if-let ((buf (get-buffer "*eclaw*")))
       (with-current-buffer buf
         (string-trim (buffer-string)))
-    (mapconcat
-     (lambda (msg)
-       (pcase (alist-get 'role msg)
-         ("user"
-          (concat "\n\nYou:\n" (or (alist-get 'content msg) "")))
-         ("assistant"
-          (let ((content (alist-get 'content msg)))
-            (when (and content (not (string-empty-p content)))
-              (concat "\n\nAssistant:\n" content))))
-         (_ nil)))
-     (or eclaw-conversation '())
-     "")))
+    ""))
 
 (defun eclaw--conversation-render-one-tool-call (tool-call)
   "Return one markdown bullet for TOOL-CALL alist."
@@ -589,19 +574,28 @@ Compared via `file-truename' after `expand-file-name'."
   "Error: access denied (eclaw sensitive path policy)."
   "Constant denial message returned to the model for blocked paths.")
 
-(defvar eclaw-grep-max-file-bytes (* 2 1024 1024)
-  "Skip files larger than this many bytes in the Elisp `grep_files' backend.")
-
-(defcustom eclaw-grep-program "grep"
-  "External program for `grep_files', or nil for pure Emacs Lisp only.
-When \"grep\" or \"rg\", eclaw runs that executable via `call-process' and
-falls back to the built-in scanner if the program is missing or fails.
-Ripgrep is invoked with `--no-ignore' so search stays exhaustive under ROOT
-(same semantics as the Elisp backend; not `.gitignore'-aware)."
-  :type '(choice (const :tag "GNU grep" "grep")
-                 (const :tag "ripgrep" "rg")
-                 (const :tag "Emacs Lisp only" nil))
+(defcustom eclaw-grep-program "rg"
+  "External program for `glob_files' and `grep_files': ripgrep (\"rg\") or GNU grep (\"grep\").
+Ripgrep is preferred; when the chosen program is missing, the other is tried."
+  :type '(choice (const :tag "ripgrep" "rg")
+                 (const :tag "GNU grep" "grep"))
   :group 'eclaw)
+
+(defcustom eclaw-rg-respect-gitignore t
+  "When non-nil, ripgrep honors `.gitignore' unless a tool call sets `include_ignored'."
+  :type 'boolean
+  :group 'eclaw)
+
+(defcustom eclaw-rg-default-head-limit 250
+  "Default maximum entries returned by `glob_files' and `grep_files'."
+  :type 'integer
+  :group 'eclaw)
+
+(defconst eclaw-rg-max-pattern-length 500
+  "Maximum allowed length of a `grep_files' pattern string.")
+
+(defconst eclaw-rg-max-head-limit 1000
+  "Hard cap on `head_limit' for search tools (also applies when `head_limit' is 0).")
 
 (defun eclaw--canonical-path (path)
   "Return `file-truename' of expanded PATH, or nil if resolution fails."
@@ -953,40 +947,7 @@ or an error description."
       (eclaw-tool-list-directory path max_entries include_hidden)
     "Error: list_directory requires \"path\" in arguments."))
 
-(defun eclaw-tool-grep-files (root pattern glob max-matches max-files-scanned max-line-length)
-  "Search files under ROOT for a literal PATTERN; return capped matches.
-GLOB filters basenames with shell wildcards (empty means all).  Skip paths
-matching `eclaw--path-sensitive-p'.  When `eclaw-grep-program' names an
-executable, use it first and fall back to the Elisp scanner on failure."
-  (let* ((root-abs (expand-file-name root))
-         (pat (or pattern ""))
-         (glob-str (or glob ""))
-         (lim-m (if (and max-matches (integerp max-matches) (> max-matches 0))
-                    max-matches
-                  100))
-         (lim-f (if (and max-files-scanned (integerp max-files-scanned)
-                         (> max-files-scanned 0))
-                    max-files-scanned
-                  5000))
-         (lim-l (if (and max-line-length (integerp max-line-length) (> max-line-length 0))
-                    max-line-length
-                  500)))
-    (cond
-     ((string-empty-p pat)
-      "Error: grep_files requires non-empty pattern (literal substring).")
-     ((not (file-directory-p root-abs))
-      (format "Error: not a directory %S" root-abs))
-     ((eclaw--path-sensitive-p root-abs)
-      eclaw--sensitive-path-msg)
-     (t
-      (condition-case err
-          (or (and eclaw-grep-program
-                   (eclaw--grep-via-process eclaw-grep-program root-abs pat glob-str
-                                              lim-m lim-f lim-l))
-              (eclaw--grep-via-elisp root-abs pat glob-str lim-m lim-f lim-l))
-        (error (format "Error during grep_files under %S: %S" root-abs err)))))))
-
-(defun eclaw--grep-resolved-program (program)
+(defun eclaw--rg-resolved-program (program)
   "Return absolute path to PROGRAM when executable, otherwise nil."
   (when (and program (not (string-empty-p program)))
     (cond
@@ -994,157 +955,405 @@ executable, use it first and fall back to the Elisp scanner on failure."
       program)
      ((executable-find program)))))
 
-(defun eclaw--grep-build-process-args (program root pattern glob-str)
-  "Return argv list for grep/rg PROGRAM searching ROOT for literal PATTERN.
-Optional GLOB-STR filters basenames (empty means all files)."
-  (cond
-   ((string-equal program "rg")
-    (append '("--fixed-strings" "--line-number" "--no-heading"
-              "--no-messages" "--no-ignore")
-            (when (not (string-empty-p glob-str))
-              (list "--glob" glob-str))
-            (list "-e" pattern root)))
-   ((string-equal program "grep")
-    (append '("-r" "-F" "-n" "-H" "-I" "--no-messages" "-D" "skip")
-            (when (not (string-empty-p glob-str))
-              (list "--include" glob-str))
-            (list "-e" pattern root)))
-   (t
-    (error "Unsupported eclaw-grep-program %S" program))))
+(defun eclaw--rg-resolve-program ()
+  "Return executable for `eclaw-grep-program', trying the alternate grep/rg if needed."
+  (or (eclaw--rg-resolved-program eclaw-grep-program)
+      (when (string-equal eclaw-grep-program "rg")
+        (eclaw--rg-resolved-program "grep"))
+      (when (string-equal eclaw-grep-program "grep")
+        (eclaw--rg-resolved-program "rg"))))
 
-(defun eclaw--grep-run-process (program args)
+(defun eclaw--rg-program-basename (program)
+  "Return basename of PROGRAM path for backend detection."
+  (file-name-nondirectory program))
+
+(defun eclaw--rg-ripgrep-p (program)
+  "Non-nil when PROGRAM names ripgrep."
+  (string-match-p "\\`rg\\'" (eclaw--rg-program-basename program)))
+
+(defun eclaw--rg-include-ignored-p (include-ignored)
+  "Non-nil when ripgrep/grep search should include gitignored paths."
+  (cond
+   ((eclaw--json-truthy-p include-ignored) t)
+   ((eq include-ignored :json-false) nil)
+   (t (not eclaw-rg-respect-gitignore))))
+
+(defun eclaw--rg-include-hidden-p (include-hidden)
+  "Non-nil when ripgrep should include hidden files and directories."
+  (eclaw--json-truthy-p include-hidden))
+
+(defun eclaw--rg-effective-head-limit (head-limit)
+  "Return positive head limit from HEAD-LIMIT, default, or hard cap."
+  (let ((lim (cond
+              ((and head-limit (integerp head-limit) (> head-limit 0))
+               head-limit)
+              ((and head-limit (integerp head-limit) (= head-limit 0))
+               eclaw-rg-max-head-limit)
+              (t eclaw-rg-default-head-limit))))
+    (min lim eclaw-rg-max-head-limit)))
+
+(defun eclaw--rg-effective-offset (offset)
+  "Return non-negative integer offset."
+  (if (and offset (integerp offset) (>= offset 0))
+      offset
+    0))
+
+(defun eclaw--rg-normalize-output-mode (mode)
+  "Return normalized output mode symbol for MODE string."
+  (let ((m (downcase (or mode "files_with_matches"))))
+    (cond
+     ((string= m "files_with_matches") 'files_with_matches)
+     ((string= m "content") 'content)
+     ((string= m "count") 'count)
+     (t (error "Invalid output_mode %S (expected files_with_matches, content, or count)"
+               mode)))))
+
+(defun eclaw--rg-validate-search-target (path)
+  "Return an error string when PATH cannot be searched, otherwise nil."
+  (let ((abs (expand-file-name path)))
+    (cond
+     ((not (or (file-directory-p abs) (file-regular-p abs)))
+      (format "Error: not a file or directory %S" abs))
+     ((eclaw--path-sensitive-p abs)
+      eclaw--sensitive-path-msg)
+     (t nil))))
+
+(defun eclaw--rg-validate-directory (path)
+  "Return an error string when PATH is not a searchable directory, otherwise nil."
+  (let ((abs (expand-file-name path)))
+    (cond
+     ((not (file-directory-p abs))
+      (format "Error: not a directory %S" abs))
+     ((eclaw--path-sensitive-p abs)
+      eclaw--sensitive-path-msg)
+     (t nil))))
+
+(defun eclaw--rg-append-scope-args (args include-hidden include-ignored glob type)
+  "Append ripgrep scope flags to ARGS."
+  (append args
+          (when (eclaw--rg-include-hidden-p include-hidden)
+            '("--hidden"))
+          (when (eclaw--rg-include-ignored-p include-ignored)
+            '("--no-ignore"))
+          (when (and glob (not (string-empty-p glob)))
+            (list "--glob" glob))
+          (when (and type (not (string-empty-p type)))
+            (list "--type" type))))
+
+(defun eclaw--rg-run-process (program args)
   "Run PROGRAM with ARGS via `call-process'.
 Return (STATUS . OUTPUT-STRING).  STATUS is the process exit code."
   (with-temp-buffer
     (let ((status (apply #'call-process program nil (current-buffer) nil args)))
       (cons status (buffer-substring-no-properties (point-min) (point-max))))))
 
-(defun eclaw--grep-parse-match-line (line)
-  "Parse one grep/rg output LINE into (FILE LINE-NUM CONTENT), or nil."
+(defun eclaw--rg-format-results (lines head-limit truncated-p &optional empty-msg)
+  "Format LINES with optional truncation marker."
+  (concat
+   (if lines
+       (mapconcat #'identity lines "\n")
+     (or empty-msg "(no matches)"))
+   (when truncated-p
+     (format "\n[eclaw: result limit %d reached]" head-limit))))
+
+(defun eclaw--rg-apply-limit (items offset head-limit)
+  "Return (SHOWN TRUNCATED-P) after OFFSET and HEAD-LIMIT on ITEMS."
+  (let* ((off (eclaw--rg-effective-offset offset))
+         (lim (eclaw--rg-effective-head-limit head-limit))
+         (rest (nthcdr (min off (length items)) items))
+         (truncated (> (length rest) lim))
+         (shown (if truncated (seq-take rest lim) rest)))
+    (list shown truncated)))
+
+(defun eclaw--rg-filter-paths (paths)
+  "Drop sensitive paths from PATHS."
+  (seq-filter (lambda (p) (not (eclaw--path-sensitive-p p))) paths))
+
+(defun eclaw--rg-parse-content-line (line)
+  "Parse one grep/rg content LINE into (FILE LINE-NUM CONTENT), or nil."
   (when (and line (not (string-empty-p line)))
     (when (string-match "\\`\\([^:\n]+\\):\\([0-9]+\\):\\(.*\\)\\'" line)
       (list (match-string 1 line)
             (string-to-number (match-string 2 line))
             (match-string 3 line)))))
 
-(defun eclaw--grep-filter-sensitive-lines (raw-lines lim-m lim-l)
-  "Filter RAW-LINES, drop sensitive paths, cap at LIM-M matches.
-Return (MATCH-LINES TRUNCATED-MATCHES-P)."
-  (let ((out nil)
-        (count 0)
-        (truncated nil))
+(defun eclaw--rg-parse-count-line (line)
+  "Parse one grep/rg count LINE into (FILE COUNT), or nil."
+  (when (and line (not (string-empty-p line)))
+    (when (string-match "\\`\\([^:\n]+\\):\\([0-9]+\\)\\'" line)
+      (list (match-string 1 line)
+            (string-to-number (match-string 2 line))))))
+
+(defun eclaw--rg-filter-content-lines (raw-lines head-limit offset max-line-length)
+  "Filter RAW content lines, drop sensitive paths, cap results.
+Return (LINES TRUNCATED-P EFFECTIVE-LIMIT)."
+  (let* ((lim (eclaw--rg-effective-head-limit head-limit))
+         (off (eclaw--rg-effective-offset offset))
+         (kept nil)
+         (skipped 0)
+         (count 0)
+         (truncated nil))
     (dolist (line raw-lines)
-      (when-let* ((parsed (eclaw--grep-parse-match-line line))
+      (when-let* ((parsed (eclaw--rg-parse-content-line line))
                   (file (expand-file-name (car parsed)))
                   (_ (not (eclaw--path-sensitive-p file))))
-        (if (< count lim-m)
-            (let ((ln (cadr parsed))
-                  (content (caddr parsed)))
-              (push (format "%s:%d:%s"
-                            file ln
-                            (eclaw--truncate-string content lim-l))
-                    out)
-              (setq count (1+ count)))
-          (setq truncated t))))
-    (list (nreverse out) truncated)))
+        (if (< skipped off)
+            (setq skipped (1+ skipped))
+          (if (< count lim)
+              (let ((ln (cadr parsed))
+                    (content (caddr parsed)))
+                (push (format "%s:%d:%s"
+                              file ln
+                              (eclaw--truncate-string content max-line-length))
+                      kept)
+                (setq count (1+ count)))
+            (setq truncated t)))))
+    (list (nreverse kept) truncated lim)))
 
-(defun eclaw--grep-format-results (match-lines lim-m lim-f truncated-matches truncated-files)
-  "Format MATCH-LINES and optional truncation markers into a result string."
-  (concat
-   (if match-lines
-       (mapconcat #'identity match-lines "\n")
-     "(no matches)")
-   (concat
-    (when truncated-matches
-      (format "\n[eclaw: match limit %d reached]" lim-m))
-    (when truncated-files
-      (format "\n[eclaw: file scan limit %d reached]" lim-f)))))
+(defun eclaw--rg-filter-path-lines (raw-output head-limit offset)
+  "Filter path-only lines, drop sensitive paths, apply offset/limit.
+Return (PATHS TRUNCATED-P EFFECTIVE-LIMIT)."
+  (let* ((paths (eclaw--rg-filter-paths
+                 (mapcar #'expand-file-name (split-string raw-output "\n" t))))
+         (limited (eclaw--rg-apply-limit paths offset head-limit)))
+    (list (car limited) (cadr limited) (eclaw--rg-effective-head-limit head-limit))))
 
-(defun eclaw--grep-via-process (program root pattern glob-str lim-m lim-f lim-l)
-  "Search with external grep/rg PROGRAM; return result string or nil on failure."
-  (when-let ((exe (eclaw--grep-resolved-program program)))
-    (condition-case nil
-        (let* ((args (eclaw--grep-build-process-args program root pattern glob-str))
-               (proc (eclaw--grep-run-process exe args))
+(defun eclaw--rg-filter-count-lines (raw-output head-limit offset)
+  "Filter count lines, drop sensitive paths, apply offset/limit.
+Return (LINES TRUNCATED-P EFFECTIVE-LIMIT)."
+  (let ((entries nil))
+    (dolist (line (split-string raw-output "\n" t))
+      (when-let* ((parsed (eclaw--rg-parse-count-line line))
+                  (file (expand-file-name (car parsed)))
+                  (count (cadr parsed))
+                  (_ (not (eclaw--path-sensitive-p file))))
+        (push (cons file count) entries)))
+    (let* ((limited (eclaw--rg-apply-limit entries offset head-limit))
+           (shown (car limited))
+           (truncated (cadr limited))
+           (lim (eclaw--rg-effective-head-limit head-limit)))
+      (list (mapcar (lambda (entry)
+                      (format "%s:%d" (car entry) (cdr entry)))
+                    shown)
+            truncated
+            lim))))
+
+(defun eclaw--rg-build-grep-args (program root pattern output-mode multiline-p
+                                    case-insensitive-p include-hidden include-ignored
+                                    glob type)
+  "Return argv for ripgrep or GNU grep content/files/count search."
+  (let ((glob-str (or glob ""))
+        (type-str (or type "")))
+    (cond
+     ((eclaw--rg-ripgrep-p program)
+      (let ((args (eclaw--rg-append-scope-args
+                   (append
+                    (pcase output-mode
+                      ('files_with_matches '("--files-with-matches"))
+                      ('count '("--count"))
+                      (_ '("--line-number" "--no-heading")))
+                    '("--no-messages")
+                    (when (eclaw--json-truthy-p case-insensitive-p) '("-i"))
+                    (when (eclaw--json-truthy-p multiline-p)
+                      '("-U" "--multiline-dotall")))
+                   include-hidden include-ignored glob-str type-str)))
+        (append args (list "-e" pattern root))))
+     ((string-equal (eclaw--rg-program-basename program) "grep")
+      (when (eclaw--json-truthy-p multiline-p)
+        (error "multiline search requires ripgrep (rg), not GNU grep"))
+      (when (and type-str (not (string-empty-p type-str)))
+        (error "type filter requires ripgrep (rg), not GNU grep"))
+      (append
+       (pcase output-mode
+         ('files_with_matches '("-r" "-l" "-I" "--no-messages" "-D" "skip"))
+         ('count '("-r" "-c" "-I" "--no-messages" "-D" "skip"))
+         (_ '("-r" "-E" "-n" "-H" "-I" "--no-messages" "-D" "skip")))
+       (when (eclaw--json-truthy-p case-insensitive-p) '("-i"))
+       (when (not (string-empty-p glob-str))
+         (list "--include" glob-str))
+       (list "-e" pattern root)))
+     (t
+      (error "Unsupported search program %S" program)))))
+
+(defun eclaw--rg-build-glob-args (program root pattern include-hidden include-ignored)
+  "Return argv for ripgrep file listing."
+  (unless (eclaw--rg-ripgrep-p program)
+    (error "glob_files requires ripgrep (rg), not GNU grep"))
+  (append
+   (eclaw--rg-append-scope-args
+    '("--files" "--no-messages")
+    include-hidden include-ignored pattern nil)
+   (list root)))
+
+(defun eclaw--rg-file-mtime-or-zero (file)
+  "Return modification time of FILE as float, or 0.0 when unavailable."
+  (condition-case nil
+      (eclaw--file-mtime-float file)
+    (error 0.0)))
+
+(defun eclaw--rg-sort-paths-by-mtime (paths)
+  "Return PATHS sorted by modification time, newest first."
+  (sort (copy-sequence paths)
+        (lambda (a b)
+          (> (eclaw--rg-file-mtime-or-zero a)
+             (eclaw--rg-file-mtime-or-zero b)))))
+
+(defun eclaw--rg-via-process (program root pattern &rest options)
+  "Run ripgrep or grep and return a formatted result string.
+OPTIONS is a plist with keys :output-mode, :multiline, :case-insensitive,
+:include-hidden, :include-ignored, :glob, :type, :head-limit, :offset,
+and :max-line-length."
+  (let* ((output-mode (eclaw--rg-normalize-output-mode (plist-get options :output-mode)))
+         (head-limit (plist-get options :head-limit))
+         (offset (plist-get options :offset))
+         (max-line-length
+          (let ((lim (plist-get options :max-line-length)))
+            (if (and lim (integerp lim) (> lim 0))
+                lim
+              500)))
+         (args (eclaw--rg-build-grep-args
+                program root pattern output-mode
+                (plist-get options :multiline)
+                (plist-get options :case-insensitive)
+                (plist-get options :include-hidden)
+                (plist-get options :include-ignored)
+                (plist-get options :glob)
+                (plist-get options :type))))
+    (if-let ((exe (or program (eclaw--rg-resolve-program))))
+        (let* ((proc (eclaw--rg-run-process exe args))
                (status (car proc))
                (output (cdr proc)))
-          (when (member status '(0 1))
-            (let ((filtered (eclaw--grep-filter-sensitive-lines
-                             (split-string output "\n" t)
-                             lim-m lim-l)))
-              (eclaw--grep-format-results (car filtered) lim-m lim-f (cadr filtered) nil))))
-      (error nil))))
+          (if (member status '(0 1))
+              (pcase output-mode
+                ('content
+                 (let ((filtered (eclaw--rg-filter-content-lines
+                                   (split-string output "\n" t)
+                                   head-limit offset max-line-length)))
+                   (eclaw--rg-format-results (nth 0 filtered) (nth 2 filtered) (nth 1 filtered))))
+                ('files_with_matches
+                 (let ((filtered (eclaw--rg-filter-path-lines
+                                   output head-limit offset)))
+                   (eclaw--rg-format-results (nth 0 filtered) (nth 2 filtered) (nth 1 filtered))))
+                ('count
+                 (let ((filtered (eclaw--rg-filter-count-lines
+                                   output head-limit offset)))
+                   (eclaw--rg-format-results (nth 0 filtered) (nth 2 filtered) (nth 1 filtered)))))
+            (format "Error: %s exited with status %s"
+                    (eclaw--rg-program-basename exe) status)))
+      (format "Error: ripgrep/grep not found (see `eclaw-grep-program')"))))
 
-(defun eclaw--grep-via-elisp (root-abs pattern glob-str lim-m lim-f lim-l)
-  "Search under ROOT-ABS using directory walk and literal substring match."
-  (let* ((regexp (regexp-quote pattern))
-         (glob-re (unless (string-empty-p glob-str)
-                    (wildcard-to-regexp glob-str)))
-         (match-lines nil)
-         (match-count 0)
-         (scan-count 0)
-         (truncated-files nil)
-         (truncated-matches nil))
-    (catch 'eclaw-grep-done
-      (dolist (file (directory-files-recursively root-abs "." nil t nil))
-        (when (>= scan-count lim-f)
-          (setq truncated-files t)
-          (throw 'eclaw-grep-done nil))
-        (setq scan-count (1+ scan-count))
-        (when (and (file-regular-p file)
-                   (not (eclaw--path-sensitive-p file))
-                   (or (null glob-re)
-                       (string-match-p glob-re (file-name-nondirectory file))))
-          (let* ((attrs (file-attributes file))
-                 (size (and attrs
-                            (if (fboundp 'file-attribute-size)
-                                (file-attribute-size attrs)
-                              (nth 7 attrs)))))
-            (when (and size (<= size eclaw-grep-max-file-bytes))
-              (condition-case nil
-                  (with-temp-buffer
-                    (insert-file-contents-literally file)
-                    (goto-char (point-min))
-                    (while (and (< match-count lim-m) (not (eobp)))
-                      (let* ((ln (line-number-at-pos))
-                             (beg (line-beginning-position))
-                             (end (line-end-position))
-                             (line (buffer-substring-no-properties beg end)))
-                        (forward-line 1)
-                        (when (string-match-p regexp line)
-                          (setq match-count (1+ match-count))
-                          (push (format "%s:%d:%s"
-                                        file ln
-                                        (eclaw--truncate-string line lim-l))
-                                match-lines)
-                          (when (>= match-count lim-m)
-                            (setq truncated-matches t)
-                            (throw 'eclaw-grep-done nil))))))
-                (error nil)))))))
-    (eclaw--grep-format-results (nreverse match-lines) lim-m lim-f
-                                truncated-matches truncated-files)))
+(defun eclaw--rg-glob-via-process (root pattern head-limit offset
+                                   include-hidden include-ignored)
+  "List files under ROOT matching glob PATTERN; return formatted string."
+  (if-let ((exe (eclaw--rg-resolved-program "rg")))
+      (let* ((args (eclaw--rg-build-glob-args exe root pattern
+                                              include-hidden include-ignored))
+             (proc (eclaw--rg-run-process exe args))
+             (status (car proc))
+             (output (cdr proc)))
+        (if (member status '(0 1))
+            (let* ((paths (eclaw--rg-sort-paths-by-mtime
+                           (eclaw--rg-filter-paths
+                            (mapcar #'expand-file-name
+                                    (split-string output "\n" t)))))
+                   (limited (eclaw--rg-apply-limit paths offset head-limit)))
+              (eclaw--rg-format-results (car limited)
+                                        (eclaw--rg-effective-head-limit head-limit)
+                                        (cadr limited)
+                                        "(no files)"))
+          (format "Error: rg exited with status %s" status)))
+    (format "Error: ripgrep (rg) not found (glob_files requires rg)")))
+
+(defun eclaw-tool-grep-files (path root pattern glob type output-mode multiline
+                            case-insensitive head-limit offset include-hidden
+                            include-ignored max-line-length)
+  "Search under PATH (or ROOT alias) for regex PATTERN; return capped results."
+  (let* ((search-path (or path root default-directory))
+         (pat (or pattern "")))
+    (cond
+     ((string-empty-p pat)
+      "Error: grep_files requires non-empty pattern (ripgrep regex).")
+     ((> (length pat) eclaw-rg-max-pattern-length)
+      (format "Error: grep_files pattern exceeds max length (%d)"
+              eclaw-rg-max-pattern-length))
+     ((eclaw--rg-validate-search-target search-path))
+     (t
+      (condition-case err
+          (eclaw--rg-via-process
+           (eclaw--rg-resolve-program)
+           (expand-file-name search-path)
+           pat
+           :output-mode output-mode
+           :multiline multiline
+           :case-insensitive case-insensitive
+           :include-hidden include-hidden
+           :include-ignored include-ignored
+           :glob glob
+           :type type
+           :head-limit head-limit
+           :offset offset
+           :max-line-length max-line-length)
+        (error (format "Error during grep_files under %S: %S"
+                       (expand-file-name search-path) err)))))))
+
+(defun eclaw-tool-glob-files (path pattern head-limit offset include-hidden include-ignored)
+  "Find files under PATH matching glob PATTERN; return capped paths."
+  (let* ((root (expand-file-name (or path default-directory)))
+         (glob (or pattern "")))
+    (cond
+     ((string-empty-p glob)
+      "Error: glob_files requires non-empty pattern (glob syntax).")
+     ((eclaw--rg-validate-directory root))
+     (t
+      (condition-case err
+          (eclaw--rg-glob-via-process root glob head-limit offset
+                                      include-hidden include-ignored)
+        (error (format "Error during glob_files under %S: %S" root err)))))))
 
 (eclaw-deftool grep_files
-  "Search text files under a directory for a literal substring (not a regexp)."
-  ((root :string "Directory root to search (absolute or relative).")
-   (pattern :string "Literal substring to search for.")
-   (glob :string
-         "Optional basename glob such as *.el; empty string means all files."
+  "Search file contents under a path using ripgrep regex syntax."
+  ((path :string
+         "File or directory to search (absolute or relative). Defaults to default-directory."
          :optional)
-   (max_matches :integer
-                "Stop after this many matching lines (default 100 when omitted)."
+   (root :string "Deprecated alias for path." :optional)
+   (pattern :string "Regular expression (ripgrep syntax).")
+   (glob :string "Optional file glob filter, e.g. **/*.el." :optional)
+   (type :string "Optional ripgrep file type, e.g. el, py, rust." :optional)
+   (output_mode :string
+                "files_with_matches (default), content, or count."
                 :optional)
-   (max_files_scanned :integer
-                      "Stop after examining this many files (default 5000 when omitted)."
-                      :optional)
+   (multiline :boolean "When true, patterns may span line boundaries." :optional)
+   (case_insensitive :boolean "When true, case-insensitive search." :optional)
+   (head_limit :integer
+               "Max entries after filtering (default 250 when omitted)."
+               :optional)
+   (offset :integer "Skip first N entries after filtering." :optional)
+   (include_hidden :boolean "When true, include hidden files and directories." :optional)
+   (include_ignored :boolean "When true, search gitignored paths." :optional)
    (max_line_length :integer
-                    "Truncate printed lines to this length (default 500 when omitted)."
+                    "Truncate matching lines in content mode (default 500)."
                     :optional))
-  (if root
-      (if pattern
-          (eclaw-tool-grep-files root pattern glob max_matches max_files_scanned max_line_length)
-        "Error: grep_files requires \"pattern\" in arguments.")
-    "Error: grep_files requires \"root\" in arguments."))
+  (if pattern
+      (eclaw-tool-grep-files path root pattern glob type output_mode multiline
+                             case_insensitive head_limit offset include_hidden
+                             include_ignored max_line_length)
+    "Error: grep_files requires \"pattern\" in arguments."))
+
+(eclaw-deftool glob_files
+  "Find files under a directory whose paths match a glob pattern."
+  ((path :string
+         "Directory root (absolute or relative). Defaults to default-directory."
+         :optional)
+   (pattern :string "Glob pattern, e.g. **/*.el or **/SKILL.md.")
+   (head_limit :integer
+               "Max paths after filtering (default 250 when omitted)."
+               :optional)
+   (offset :integer "Skip first N paths after filtering." :optional)
+   (include_hidden :boolean "When true, include hidden files and directories." :optional)
+   (include_ignored :boolean "When true, include gitignored paths." :optional))
+  (if pattern
+      (eclaw-tool-glob-files path pattern head_limit offset include_hidden include_ignored)
+    "Error: glob_files requires \"pattern\" in arguments."))
 
 (eclaw-deftool notes_write_text
   "Write a `.txt` under the project `notes/` directory (create or append).

@@ -34,7 +34,7 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 - API authentication via `OPENROUTER_API_KEY` or `eclaw-api-key`
 - HTTP via `url-retrieve-synchronously` (blocking)
 - Request construction: `eclaw-build-chat-payload`
-- Transport: `eclaw-post-completion-request` → `eclaw-get-response`; convenience `eclaw-send-request`
+- Transport: `eclaw-post-completion-request` → `eclaw-get-response`
 - **All POSTs** go through internal gate `eclaw--http-post` (unibyte UTF-8 for body and headers); see [`docs/http-transport.md`](docs/http-transport.md)
 - JSON encode/decode; UTF-8 response bodies
 - Endpoint: `https://openrouter.ai/api/v1/chat/completions`
@@ -61,10 +61,20 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 | Tool | Role |
 |------|------|
 | `read_file` | Read file text; sensitive-path policy |
-| `list_directory` | Bounded directory listing |
-| `grep_files` | Literal substring search with caps; external grep/rg or Elisp fallback |
+| `list_directory` | Bounded directory listing (one level; not a glob search) |
+| `grep_files` | Content search — ripgrep regex; default `files_with_matches`; gitignore-aware |
+| `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) |
 | `notes_write_text` | `.txt` only under `<project>/notes/` |
 | `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only |
+
+## Search tools (Milestone 1c)
+
+- **`glob_files`:** ripgrep `--files` with glob pattern; paths sorted by mtime (newest first); requires `rg`
+- **`grep_files`:** ripgrep regex (GNU grep fallback for content / files_with_matches / count only); default `output_mode: files_with_matches`; respects `.gitignore` unless `include_ignored: true`
+- **`list_directory`:** one-level listing (unchanged); not a substitute for `glob_files`
+- **Security:** `eclaw--path-sensitive-p` on search root and every result path (post-filter after external search)
+- **Backend:** `eclaw-grep-program` (`"rg"` default); caps via `head_limit` / `offset` / line truncation; `[eclaw: result limit N reached]` when truncated
+- **Config:** `eclaw-rg-respect-gitignore`, `eclaw-rg-default-head-limit` (250), `eclaw-rg-max-head-limit` (1000), `eclaw-rg-max-pattern-length` (500)
 
 ## Project agent skills (Milestone 1b — done)
 
@@ -72,22 +82,14 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 - Discover: `.eclaw/skills/<name>/SKILL.md` only
 - YAML frontmatter: `name`, `description`; fallback from body
 - System message: **index only** (name, description, path); bodies loaded via `read_file`
-- Cache: `eclaw--skills-cache`, invalidated on mtime signature or `skill_write`
+- Cache: `eclaw--skills-cache`; one directory scan builds mtime signature and skill list; invalidated on signature change or `skill_write`
 
 ## Sensitive path policy
 
 - `defcustom`: `eclaw-sensitive-path-prefixes`, `eclaw-sensitive-path-files`
-- `eclaw--path-sensitive-p` before read/list/grep
+- `eclaw--path-sensitive-p` before read/list/grep/glob
 - Denial: `eclaw--sensitive-path-msg`
-
-## grep_files backend
-
-- **`eclaw-grep-program`** (`defcustom`): `"grep"` (default), `"rg"`, or `nil` (Elisp only)
-- **Primary:** `call-process` on GNU grep (`-rF -n -H -I`) or ripgrep (`--fixed-strings`, `--no-ignore`)
-- **Fallback:** pure Elisp directory walk when the program is missing, exits non-zero, or `eclaw-grep-program` is `nil`
-- **Security:** every match path is post-filtered through `eclaw--path-sensitive-p` (external tools can follow symlinks)
-- **Semantics:** exhaustive search under `root` — **not** `.gitignore`-aware (ripgrep uses `--no-ignore` to match Elisp behavior)
-- **Caps:** global match limit and line truncation apply to all backends; `max_files_scanned` is enforced only on the Elisp fallback
+- Post-filter on every path from `glob_files` / `grep_files` (including symlink targets via `file-truename`)
 
 ## Logging and UI
 
@@ -99,7 +101,7 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 
 ## Response helpers (implemented)
 
-- `eclaw-get-first-choice`, `eclaw-get-message`, `eclaw-get-content`, `eclaw-get-tool-calls`, `eclaw-get-finish-reason`, `eclaw-extract-usage`
+- `eclaw-get-first-choice`, `eclaw-get-message`, `eclaw-get-content`, `eclaw-get-tool-calls`
 - `eclaw-get-content` falls back to `reasoning` when `content` is empty
 
 ---
@@ -188,9 +190,17 @@ Tool result:
 - YAML frontmatter; mtime-based cache invalidation
 - No global/user-wide skill paths (extension point for later)
 
+## Milestone 1c — Ripgrep-shaped search tools ✓
+
+- Shared `eclaw--rg-*` layer (`call-process`, no shell); config defaults for gitignore, caps, pattern length
+- **`grep_files` upgraded:** regex, `output_mode` (default `files_with_matches`), gitignore-aware, pagination, GNU grep fallback
+- **`glob_files` added:** ripgrep `--files`, mtime sort, ripgrep-only
+- System prompt exploration playbook; sensitive-path post-filter on all result paths
+- Verified via batch checklist (May 2026): gitignore default, all output modes, regex/multiline, caps, fallback, symlink filter
+
 ## Transport layer refactor ✓
 
-- Public API: `eclaw-build-chat-payload`, `eclaw-post-completion-request`, `eclaw-send-request`
+- Public API: `eclaw-build-chat-payload`, `eclaw-post-completion-request`
 - Response parsing and accessors consolidated in `;;; HTTP transport` section (after tools, before orchestration)
 - `eclaw-chat` uses transport layer; logging and usage display remain in orchestration
 - Single POST gate: `eclaw--http-post` with unibyte UTF-8 encoding for body and headers (see [`docs/http-transport.md`](docs/http-transport.md))

@@ -47,7 +47,7 @@ Use `Content-Type: application/json; charset=utf-8`.
 All outgoing POST traffic must go through this chain:
 
 ```text
-eclaw-chat / eclaw-send-request
+eclaw-chat
   → eclaw-post-completion-request
     → eclaw--http-post          ; sets url-request-* only here
       → eclaw--utf8-unibyte-string
@@ -64,7 +64,6 @@ eclaw-chat / eclaw-send-request
 | `eclaw--http-unibyte-headers` | Map header alist values through the encoder |
 | `eclaw--assert-http-unibyte-p` | Internal check: body and headers are unibyte before send |
 | `eclaw-post-completion-request` | OpenRouter chat completions POST (public transport API) |
-| `eclaw-send-request` | Build messages → payload → POST (convenience wrapper) |
 
 **Do not** set `url-request-data` or `url-request-extra-headers` anywhere else
 in eclaw. If you add another HTTP endpoint later, extend `eclaw--http-post` or
