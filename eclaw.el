@@ -1343,15 +1343,6 @@ When `content' is empty, fall back to `reasoning' if present."
 Each element follows the API tool-call shape (id, type, function, ...)."
   (alist-get 'tool_calls (eclaw-get-message response)))
 
-(defun eclaw-get-finish-reason (response)
-  "From RESPONSE, return `finish_reason' for the first choice or nil.
-Useful when debugging why a completion stopped (e.g. `stop', `tool_calls')."
-  (alist-get 'finish_reason (eclaw-get-first-choice response)))
-
-(defun eclaw-extract-usage (response)
-  "Return the `usage' alist from parsed RESPONSE, or nil if absent."
-  (alist-get 'usage response))
-
 ;;; Orchestration
 
 (defvar eclaw-max-completions-per-prompt 32
