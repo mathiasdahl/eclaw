@@ -47,8 +47,10 @@
 ;; Layers (all in this file; transport is a distinct logical section):
 ;;
 ;; - Configuration: API key, model id, system prompt; tools via `eclaw-deftool';
-;;   sensitive-path defaults via `eclaw-sensitive-path-prefixes' /
-;;   `eclaw-sensitive-path-files'.
+;;   each tool has a risk class (`:read' or `:write') for `eclaw-tool-approval-mode'
+;;   (optional minibuffer gate before execution in `eclaw--dispatch-one-tool-call');
+;;   sensitive-path defaults via
+;;   `eclaw-sensitive-path-prefixes' / `eclaw-sensitive-path-files'.
 ;; - Message builders: alists shaped like OpenAI chat messages; serialized
 ;;   with `json-encode' (symbol keys, vectors for `messages' array).
 ;; - HTTP transport: `eclaw-build-chat-payload', `eclaw-post-completion-request',
@@ -58,8 +60,10 @@
 ;; - Orchestration: `eclaw-chat' loops completions until the assistant returns
 ;;   without `tool_calls', or a cap is reached (`eclaw-max-completions-per-prompt',
 ;;   `eclaw-max-tokens-per-prompt').  Each assistant message may request multiple
-;;   tools; every call is executed and a matching `role: tool' row is appended.
-;; - UI: `eclaw-agent-chat' appends to buffer `*eclaw*'; logging writes
+;;   tools; every call is dispatched and a matching `role: tool' row is appended
+;;   (possibly a refusal when `eclaw-tool-approval-mode' gates the call).
+;; - UI: `eclaw-agent-chat' appends to buffer `*eclaw*' (including tool
+;;   approval/denial lines when `eclaw-tool-approval-mode' gates a call); logging writes
 ;;   JSON lines to `eclaw-agent-log-file'; conversation archives write
 ;;   Markdown files to `eclaw-conversation-archive-dir' (on reset or manual save).
 ;;
@@ -517,12 +521,42 @@ CONTENT may be nil; it is stored as an empty string."
 ;;; Tools (registry and `eclaw-deftool')
 
 (defvar eclaw--tool-registry (make-hash-table :test 'equal)
-  "Maps tool name string to plist (:description :parameters :handler).
-Populated by `eclaw-deftool'.")
+  "Maps tool name string to plist (:description :parameters :handler :risk).
+Populated by `eclaw-deftool'.  :risk is `:read' (default) or `:write'.")
+
+(defconst eclaw--tool-call-not-approved-msg
+  "Error: tool execution not approved (eclaw)."
+  "Sent to the model when a gated tool is skipped (user refusal or batch deny).")
 
 (defvar eclaw-tools-enabled t
   "When non-nil, include registered tools in outgoing chat requests.
 When nil, behave like text-only completions regardless of registry contents.")
+
+(defcustom eclaw-tool-approval-mode 'off
+  "How strictly to gate tool execution with `eclaw--dispatch-one-tool-call'.
+
+`off' — run tools immediately (no prompts).
+
+`writes' — interactively approve each call to tools tagged `:write'
+          (`notes_write_text', `skill_write', …).
+
+`all' — interactively approve every registered tool before it runs."
+  :type '(choice (const :tag "Off (no approval)" off)
+                 (const :tag "Writes only (prompt before :write)" writes)
+                 (const :tag "All tools (prompt every call)" all))
+  :group 'eclaw)
+
+(defcustom eclaw-tool-approval-noninteractive 'deny
+  "Behavior when tool approval is active and Emacs is batch / noninteractive.
+
+Used when `eclaw-tool-approval-mode' is not `off' and code would prompt,
+but batch Emacs (`noninteractive' non-nil): no minibuffer exists.
+
+`deny' — do not execute gated tools (return refusal text to the model).
+`allow' — run handlers without prompting (for scripted or batch jobs)."
+  :type '(choice (const :tag "Deny gated tools" deny)
+                 (const :tag "Allow gated tools (no prompt)" allow))
+  :group 'eclaw)
 
 (defcustom eclaw-debug nil
   "When non-nil, emit verbose eclaw progress in the echo area.
@@ -779,16 +813,100 @@ Return a status string."
     (maphash (lambda (k _) (push k keys)) eclaw--tool-registry)
     (sort keys #'string<)))
 
-(defun eclaw--register-tool (name description parameters-schema handler)
+(eval-and-compile
+
+(defun eclaw--normalize-tool-risk (risk)
+  "Return `:write' if RISK is `:write', otherwise `:read'."
+  (if (eq risk :write) :write :read))
+
+(defun eclaw--deftool-leading-options-p (form)
+  "Non-nil when FORM is a property list of `eclaw-deftool' options.
+Recognized keys include `:risk' (value `:read' or `:write')."
+  (and (consp form)
+       (keywordp (car form))
+       (plist-member form :risk)))
+
+) ;; eval-and-compile
+
+(defun eclaw--register-tool (name description parameters-schema handler
+                              &optional risk)
   "Register a tool NAME (string) for the API and for dispatch.
 PARAMETERS-SCHEMA is the JSON Schema `parameters' object (type object,
 properties, required).  HANDLER is `(lambda (args) ...)' with ARGS an
-alist of symbol keys from parsed tool arguments."
+alist of symbol keys from parsed tool arguments.
+Optional RISK is `:read' (default) or `:write' (side effects on disk)."
   (puthash name
            (list :description description
                  :parameters parameters-schema
-                 :handler handler)
+                 :handler handler
+                 :risk (eclaw--normalize-tool-risk (or risk :read)))
            eclaw--tool-registry))
+
+(defun eclaw--tool-risk-class (tool-name)
+  "Return TOOL-NAME's risk symbol `:read' or `:write', default `:read'."
+  (if-let ((info (gethash tool-name eclaw--tool-registry)))
+      (eclaw--normalize-tool-risk (plist-get info :risk))
+    :read))
+
+(defun eclaw--tool-call-would-require-approval-p (tool-name)
+  "Non-nil when `eclaw-tool-approval-mode' gates execution of TOOL-NAME."
+  (pcase eclaw-tool-approval-mode
+    ('off nil)
+    ('writes (eq (eclaw--tool-risk-class tool-name) :write))
+    ('all t)
+    (_ nil)))
+
+(defun eclaw--user-approves-tool-call-p (tool-name json-args-summary)
+  "Ask whether TOOL-NAME may run once.
+Optional JSON-ARGS-SUMMARY is echoed (truncated).  Return nil on deny or quit."
+  (let ((question
+         (concat (format "eclaw: allow tool `%s' once? " tool-name)
+                 (unless (string-empty-p json-args-summary)
+                   (format "\narguments: %s"
+                           (eclaw--truncate-string json-args-summary 240))))))
+    (condition-case nil
+        (if (fboundp 'read-answer)
+            (pcase (read-answer
+                    question
+                    '(("allow" "Run this tool call once" "a")
+                      ("deny" "Skip; send refusal to the model" "d")))
+              ("allow" t)
+              (_ nil))
+          (y-or-n-p question))
+      (quit nil))))
+
+(defun eclaw--tool-approval-transcript-line (tool-name args-summary allowed-p context)
+  "Append one approval/denial audit line when buffer `*eclaw*' exists.
+
+TOOL-NAME and JSON-ARGS-SUMMARY are as in tool dispatch (ARGS-SUMMARY may be
+empty).  ALLOWED-P is whether the handler will run.
+
+CONTEXT is `interactive' — user answered the minibuffer — or `batch' — Emacs
+runs with `noninteractive' non-nil and `eclaw-tool-approval-noninteractive'
+decides.  Silence when `*eclaw*' is absent (e.g. `eclaw-chat' without UI)."
+  (when-let ((buf (get-buffer "*eclaw*")))
+    (let ((suffix
+           (pcase context
+             ('interactive
+              (if allowed-p "allowed interactively" "denied interactively"))
+             ('batch
+              (if allowed-p
+                  "allowed in batch Emacs (`noninteractive')"
+                "denied in batch Emacs (`noninteractive')"))
+             (_ (error "eclaw internal error: unknown transcript context %S" context)))))
+      (with-current-buffer buf
+        (eclaw--eclaw-buffer-append
+         (concat "[eclaw: tool approval] "
+                 (if allowed-p "ALLOW" "DENY")
+                 " `"
+                 tool-name
+                 "'"
+                 (let ((tail (string-trim (or args-summary ""))))
+                   (if (string-empty-p tail)
+                       ""
+                     (concat " "
+                             (eclaw--truncate-string tail 200))))
+                 " — " suffix "\n"))))))
 
 (defun eclaw--deftool-params-to-schema (params)
   "Turn PARAMS from `eclaw-deftool' into a JSON Schema parameters alist.
@@ -820,7 +938,7 @@ When the fourth element is `:optional', omit SYM from JSON `required'."
       (properties . ,(nreverse properties))
       (required . ,(apply #'vector (mapcar #'symbol-name (nreverse required)))))))
 
-(defmacro eclaw-deftool (name description params &rest body)
+(defmacro eclaw-deftool (name description params &rest rest)
   "Declare a model-invokable tool.
 NAME is a symbol (API name is `symbol-name' of NAME).  DESCRIPTION is a
 short string for the API.  PARAMS is a list of (SYM TYPE-KEYWORD DESC [:optional]).
@@ -828,24 +946,31 @@ TYPE-KEYWORD is :string, :integer, etc.; each SYM is bound in BODY
 from the parsed arguments alist passed to the implementation.
 Use `:optional' as fourth element to omit the property from JSON `required'.
 
-BODY should return a string (tool result content for the model)."
+Optional leading property list `(:risk :write)' or `(:risk :read)' may
+appear immediately before BODY (default `:read').  BODY should return a
+string (tool result content for the model)."
   (declare (indent 2))
   (unless (stringp description)
     (error "`eclaw-deftool' description must be a string"))
-  (let ((bindings
-         (mapcar (lambda (spec)
-                   (unless (and (consp spec) (symbolp (car spec)))
-                     (error "Invalid `eclaw-deftool' parameter: %S" spec))
-                   (let ((sym (car spec)))
-                     (list sym `(alist-get ',sym args))))
-                 params)))
+  (let* ((props (when (eclaw--deftool-leading-options-p (car rest))
+                  (pop rest)))
+         (risk (if props (or (plist-get props :risk) :read) :read))
+         (body rest)
+         (bindings
+          (mapcar (lambda (spec)
+                    (unless (and (consp spec) (symbolp (car spec)))
+                      (error "Invalid `eclaw-deftool' parameter: %S" spec))
+                    (let ((sym (car spec)))
+                      (list sym `(alist-get ',sym args))))
+                  params)))
     `(eclaw--register-tool
       ,(symbol-name name)
       ,description
       (eclaw--deftool-params-to-schema ',params)
       (lambda (args)
         (let* ,bindings
-          ,@body)))))
+          ,@body))
+      ,risk)))
 
 (defun eclaw-tool-definitions ()
   "Return the OpenAI-format `tools' list, or nil if tools are disabled or absent.
@@ -1364,6 +1489,7 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
    (append :boolean
            "When true, append to an existing file instead of overwriting."
            :optional))
+  (:risk :write)
   (if relative_path
       (if content
           (eclaw-tool-notes-write-text relative_path content (eclaw--json-truthy-p append))
@@ -1375,6 +1501,7 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
   ((skill_dir :string
               "Single directory name under .eclaw/skills/ ([A-Za-z0-9_-], max 64 chars).")
    (content :string "Full SKILL.md body (UTF-8), including optional YAML front matter."))
+  (:risk :write)
   (if skill_dir
       (if content
           (eclaw-tool-skill-write skill_dir content)
@@ -1385,7 +1512,16 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
   "Execute the TOOL-CALL alist from the API; return the tool result string.
 TOOL-CALL follows the API tool-call shape (`function.name', `function.arguments'
 JSON).  Dispatches via `eclaw--tool-registry'; unknown tools yield a short
-error string."
+error string.
+
+When `eclaw-tool-approval-mode' requires approval, ask in the minibuffer
+before `funcall' on the handler; if the user refuses, or Emacs is batch
+(non-nil variable `noninteractive'; see `eclaw-tool-approval-noninteractive'),
+return
+`eclaw--tool-call-not-approved-msg' without running the handler.
+
+When buffer `*eclaw*' exists, gated outcomes are appended for the transcript
+via `eclaw--tool-approval-transcript-line' (audit of allow vs deny)."
   (let* ((fn-spec (alist-get 'function tool-call))
          (name (alist-get 'name fn-spec))
          (args-str (alist-get 'arguments fn-spec))
@@ -1393,20 +1529,37 @@ error string."
           (let ((json-object-type 'alist)
                 (json-array-type 'list)
                 (json-key-type 'symbol))
-            (json-read-from-string args-str))))
+            (json-read-from-string args-str)))
+         (args-summary
+          (let ((s (string-trim (or args-str ""))))
+            (if (string-equal s "{}") "" s))))
     (message
      "eclaw: tool %s%s"
      name
-     (let ((preview (string-trim (or args-str ""))))
-       (if (or (string-empty-p preview) (string-equal preview "{}"))
-           ""
-         (let ((max 100))
-           (if (> (length preview) max)
-               (format " %s…" (substring preview 0 max))
-             (format " %s" preview))))))
+     (if (string-empty-p args-summary)
+         ""
+       (let ((max 100))
+         (if (> (length args-summary) max)
+             (format " %s…" (substring args-summary 0 max))
+           (format " %s" args-summary)))))
     (if-let ((info (gethash name eclaw--tool-registry))
              (handler (plist-get info :handler)))
-        (funcall handler args)
+        (let ((gated-p (eclaw--tool-call-would-require-approval-p name)))
+          (cond
+           ((not gated-p)
+            (funcall handler args))
+           (noninteractive
+            (let ((allow-p (eq eclaw-tool-approval-noninteractive 'allow)))
+              (eclaw--tool-approval-transcript-line name args-summary allow-p 'batch)
+              (if allow-p
+                  (funcall handler args)
+                eclaw--tool-call-not-approved-msg)))
+           ((eclaw--user-approves-tool-call-p name args-summary)
+            (eclaw--tool-approval-transcript-line name args-summary t 'interactive)
+            (funcall handler args))
+           (t
+            (eclaw--tool-approval-transcript-line name args-summary nil 'interactive)
+            eclaw--tool-call-not-approved-msg)))
       (format "Unknown tool: %s" name))))
 
 (defun eclaw--tool-result-messages (tool-calls &optional synth-reason)
