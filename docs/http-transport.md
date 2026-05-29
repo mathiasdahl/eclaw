@@ -1,7 +1,9 @@
 # HTTP transport and the multibyte request pitfall
 
 eclaw talks to OpenRouter through Emacs’s built-in `url` library
-(`url-retrieve-synchronously`). That stack is strict about outgoing request
+(`url-retrieve-synchronously`; implementation in **`eclaw-http.el`**, loaded by
+**`eclaw.el`** with **`(require 'eclaw-http)`** after **`(require 'eclaw-tools)`**).
+That stack is strict about outgoing request
 encoding: **the full HTTP request string must be unibyte** (raw bytes). If any
 part is a multibyte Emacs string, the request fails before it leaves Emacs with:
 
@@ -80,9 +82,14 @@ with raw strings.
 
 ## Related notes
 
-- Response bodies are decoded in `eclaw-get-response` with `decode-coding-region`
+- Response bodies are decoded in **`eclaw-http.el`** (`eclaw-get-response`) with `decode-coding-region`
   and `'utf-8` (separate concern from outgoing encoding).
 - JSONL logging (`eclaw-append-json-log`) writes to disk only; it does not use
   `url`.
-- When eclaw is split into `eclaw-http.el`, keep `eclaw--http-post` and the
-  encoding helpers in that file as the only outbound HTTP surface.
+- Outbound helpers (`eclaw--http-post` and callers) live only in **`eclaw-http.el`**.
+  **`eclaw-build-chat-payload`** stays in **`eclaw.el`** and attaches `tools` from
+  **`eclaw-tool-definitions`** (**`eclaw-tools.el`**). **`eclaw-http.el`** does not
+  `(require 'eclaw-tools)` — only the orchestration spine loads the registry.
+- Source layout: **`eclaw.el`** (orchestration), **`eclaw-skills.el`**, **`eclaw-tools.el`**,
+  **`eclaw-http.el`**. Load with `(require 'eclaw)` after adding the repo directory to
+  `load-path` (see **`README.md`**).

@@ -1,6 +1,6 @@
 # eclaw — Architecture & Development Plan
 
-> **Keep this file current.** After any meaningful change to `eclaw.el` (features, limits, tools, milestones, or architecture), update this plan in the same session. Mark completed work as done, move stale “planned” items to “implemented” or delete them, and adjust “next steps” so the doc matches reality—not aspiration.
+> **Keep this file current.** After any meaningful change to the eclaw sources (`eclaw.el`, `eclaw-*.el`, features, limits, tools, milestones, or architecture), update this plan in the same session. Mark completed work as done, move stale “planned” items to “implemented” or delete them, and adjust “next steps” so the doc matches reality—not aspiration.
 
 ## Project Overview
 
@@ -23,7 +23,7 @@ Current model backend:
 - OpenRouter API
 - model: `deepseek/deepseek-v4-flash` (`eclaw-model`)
 
-Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in the file header. **Decision:** keep one file for now; split only when the tradeoffs below justify it.
+Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650; orchestration spine), **`eclaw-tools.el`** (~1,080; registry and handlers), **`eclaw-skills.el`** (~200), **`eclaw-http.el`** (~165). Load with `(require 'eclaw)` only — see **Source file layout** below.
 
 ---
 
@@ -32,10 +32,10 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 ## OpenRouter integration
 
 - API authentication via `OPENROUTER_API_KEY` or `eclaw-api-key`
-- HTTP via `url-retrieve-synchronously` (blocking)
-- Request construction: `eclaw-build-chat-payload`
-- Transport: `eclaw-post-completion-request` → `eclaw-get-response`
-- **All POSTs** go through internal gate `eclaw--http-post` (unibyte UTF-8 for body and headers); see [`docs/http-transport.md`](docs/http-transport.md)
+- HTTP via `url-retrieve-synchronously` (blocking) in **`eclaw-http.el`**
+- Request construction (**`tools` injection**): `eclaw-build-chat-payload` in **`eclaw.el`** (calls `eclaw-tool-definitions` in **`eclaw-tools.el`**)
+- Transport (`eclaw-http.el`): `eclaw-post-completion-request` → `eclaw-get-response`
+- **All POSTs** go through **`eclaw--http-post`** in **`eclaw-http.el`** (unibyte UTF-8 body and headers); see [`docs/http-transport.md`](docs/http-transport.md)
 - JSON encode/decode; UTF-8 response bodies
 - Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 
@@ -49,23 +49,25 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 
 ## Tool calling (OpenAI/OpenRouter shape)
 
-- Registry: `eclaw-deftool` macro → `eclaw--tool-registry` (hash table; not `cl-defstruct`)
+- Registry: `eclaw-deftool` macro → `eclaw--tool-registry` in **`eclaw-tools.el`** (hash table; not `cl-defstruct`); plist includes `:risk` (`:read` default, `:write` for disk writes)
+- Optional leading options in `eclaw-deftool`, e.g. `(:risk :write)`, before tool body
+- **Tool approval** (complete): **`eclaw-tool-approval-mode`** (`off` / `writes` / `all`; default **`off`**), interactive/batch gate, transcript lines in **`*eclaw*`**, persisted rules in **`eclaw-data-dir/tool-approval-rules.el`** (global, project-scoped, and args-scoped keys; **`remember`** / **`remember-project`** / **`remember-exact`**); maintenance: **`eclaw-list-tool-approval-rules`**, **`eclaw-remove-tool-approval-rule`**, **`eclaw-clear-tool-approval-rules`** — see [`docs/tool-approval.md`](docs/tool-approval.md)
 - Optional parameters via `:optional` in `eclaw-deftool`
-- Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages`
+- Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages` (**`eclaw-tools.el`**)
 - Multi-tool per turn; multi-round loop in `eclaw-chat`
 - Toggle tools in requests: `eclaw-tools-enabled`
 - Safety caps: `eclaw-max-completions-per-prompt`, `eclaw-max-tokens-per-prompt`
 
 ## Registered tools
 
-| Tool | Role |
-|------|------|
-| `read_file` | Read file text; sensitive-path policy |
-| `list_directory` | Bounded directory listing (one level; not a glob search) |
-| `grep_files` | Content search — ripgrep regex; default `files_with_matches`; gitignore-aware |
-| `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) |
-| `notes_write_text` | `.txt` only under `<project>/notes/` |
-| `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only |
+| Tool | Role | `:risk` (Slice A) |
+|------|------|-------------------|
+| `read_file` | Read file text; sensitive-path policy | `:read` |
+| `list_directory` | Bounded directory listing (one level; not a glob search) | `:read` |
+| `grep_files` | Content search — ripgrep regex; default `files_with_matches`; gitignore-aware | `:read` |
+| `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) | `:read` |
+| `notes_write_text` | `.txt` only under `<project>/notes/` | `:write` |
+| `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only | `:write` |
 
 ## Search tools (Milestone 1c)
 
@@ -73,21 +75,21 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 - **`grep_files`:** ripgrep regex (GNU grep fallback for content / files_with_matches / count only); default `output_mode: files_with_matches`; respects `.gitignore` unless `include_ignored: true`
 - **`list_directory`:** one-level listing (unchanged); not a substitute for `glob_files`
 - **Security:** `eclaw--path-sensitive-p` on search root and every result path (post-filter after external search)
-- **Backend:** `eclaw-grep-program` (`"rg"` default); caps via `head_limit` / `offset` / line truncation; `[eclaw: result limit N reached]` when truncated
-- **Config:** `eclaw-rg-respect-gitignore`, `eclaw-rg-default-head-limit` (250), `eclaw-rg-max-head-limit` (1000), `eclaw-rg-max-pattern-length` (500)
+- **Backend:** `eclaw-grep-program` (`"rg"` default) in **`eclaw-tools.el`**; caps via `head_limit` / `offset` / line truncation; `[eclaw: result limit N reached]` when truncated
+- **Config:** `eclaw-grep-program`, `eclaw-rg-respect-gitignore`, `eclaw-rg-default-head-limit` (250), `eclaw-rg-max-head-limit` (1000), `eclaw-rg-max-pattern-length` (500) — all in **`eclaw-tools.el`**
 
 ## Project agent skills (Milestone 1b — done)
 
 - Project root: directory containing `.eclaw` (`eclaw--skills-project-root`)
-- Discover: `.eclaw/skills/<name>/SKILL.md` only
+- Discover: `.eclaw/skills/<name>/SKILL.md` only (**`eclaw-skills.el`**)
 - YAML frontmatter: `name`, `description`; fallback from body
 - System message: **index only** (name, description, path); bodies loaded via `read_file`
 - Cache: `eclaw--skills-cache`; one directory scan builds mtime signature and skill list; invalidated on signature change or `skill_write`
 
 ## Sensitive path policy
 
-- `defcustom`: `eclaw-sensitive-path-prefixes`, `eclaw-sensitive-path-files`
-- `eclaw--path-sensitive-p` before read/list/grep/glob
+- `defcustom`: `eclaw-sensitive-path-prefixes`, `eclaw-sensitive-path-files` (**`eclaw-tools.el`**)
+- `eclaw--path-sensitive-p` before read/list/grep/glob (**`eclaw-tools.el`**)
 - Denial: `eclaw--sensitive-path-msg`
 - Post-filter on every path from `glob_files` / `grep_files` (including symlink targets via `file-truename`)
 
@@ -99,7 +101,7 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 - UI: append-only buffer `*eclaw*`; token usage in echo area when `eclaw-debug` is non-nil
 - Echo area: short tool-dispatch lines always; HTTP progress, token counts, and index reloads only when `eclaw-debug` is non-nil (`M-x eclaw-toggle-debug`, or `M-x customize-variable RET eclaw-debug RET`)
 
-## Response helpers (implemented)
+## Response helpers (implemented in **`eclaw-http.el`**)
 
 - `eclaw-get-first-choice`, `eclaw-get-message`, `eclaw-get-content`, `eclaw-get-tool-calls`
 - `eclaw-get-content` falls back to `reasoning` when `content` is empty
@@ -108,18 +110,19 @@ Implementation: single file `eclaw.el` (~1,270 lines). Layers are documented in 
 
 # Current Architecture
 
-## Layer map (logical; all in `eclaw.el` today)
+## Layer map (logical; **`eclaw-http.el`** = transport implementation)
 
 ```text
 UI (*eclaw*, eclaw-agent-chat)
 ↓
-Orchestration (eclaw-chat — loop, caps, state)
+Orchestration (`eclaw.el`: eclaw-chat — loop, caps, state)
 ↓
-Conversation runtime (eclaw-conversation, message builders)
+Conversation runtime (`eclaw.el`: eclaw-conversation, message builders)
 ↓
-Tool runtime (registry, dispatch, handlers)
+Tool runtime (`eclaw-tools.el`: registry, dispatch, handlers)
 ↓
-Transport (eclaw-build-chat-payload, eclaw-post-completion-request, eclaw--http-post, eclaw-get-response)
+Transport (`eclaw-http.el`: eclaw-post-completion-request, eclaw--http-post, eclaw-get-response, accessors)
+  ; `eclaw-build-chat-payload' in `eclaw.el` (attaches `tools' from `eclaw-tools.el')
 ↓
 OpenRouter API
 ```
@@ -198,12 +201,23 @@ Tool result:
 - System prompt exploration playbook; sensitive-path post-filter on all result paths
 - Verified via batch checklist (May 2026): gitignore default, all output modes, regex/multiline, caps, fallback, symlink filter
 
-## Transport layer refactor ✓
+## Tool call approval ✓
 
-- Public API: `eclaw-build-chat-payload`, `eclaw-post-completion-request`
-- Response parsing and accessors consolidated in `;;; HTTP transport` section (after tools, before orchestration)
-- `eclaw-chat` uses transport layer; logging and usage display remain in orchestration
-- Single POST gate: `eclaw--http-post` with unibyte UTF-8 encoding for body and headers (see [`docs/http-transport.md`](docs/http-transport.md))
+Human-in-the-loop before local tools run, with persisted rules. Documented in [`docs/tool-approval.md`](docs/tool-approval.md). Slices A–F:
+
+- **A** — `:risk` on tools; `eclaw-tool-approval-mode` / `eclaw--tool-call-would-require-approval-p`
+- **B** — Interactive gate in `eclaw--dispatch-one-tool-call`; batch via `eclaw-tool-approval-noninteractive`
+- **C** — `eclaw--tool-approval-transcript-line` in `*eclaw*`
+- **D** — `tool-approval-rules.el`; global **`remember`**
+- **E** — Project- and args-scoped rule keys; **`remember-project`** / **`remember-exact`**; `eclaw-list-tool-approval-rules`, `eclaw-remove-tool-approval-rule`, `eclaw-clear-tool-approval-rules`
+- **F** — Multi-tool and cap behavior documented (one tool message per `tool_call_id`; synthetic results on token cap)
+
+## Transport layer refactor ✓ (+ physical **`eclaw-http.el`** split, May 2026)
+
+- Public API: `eclaw-build-chat-payload` (**`eclaw.el`**), **`eclaw-post-completion-request`** (**`eclaw-http.el`**)
+- Parsing and accessors live in **`eclaw-http.el`**; **`eclaw.el`** loads **`(require 'eclaw-tools)`** then **`(require 'eclaw-http)`** before **`eclaw-build-chat-payload`**
+- **`eclaw-chat`** unchanged: build payload → post → parse; logging and usage stay in orchestration
+- Single POST gate: **`eclaw--http-post`** (unibyte UTF-8) — [`docs/http-transport.md`](docs/http-transport.md)
 
 ---
 
@@ -219,17 +233,16 @@ only the JSON body is not enough—header values (e.g. `Authorization` built fro
 Multibyte text in HTTP request: POST /api/v1/chat/completions HTTP/1.1
 ```
 
-**Rule:** never set `url-request-data` or `url-request-extra-headers` outside
-`eclaw--http-post`. Full write-up: [`docs/http-transport.md`](docs/http-transport.md).
+**Rule:** never set `url-request-data` or `url-request-extra-headers` outside **`eclaw--http-post`** (**`eclaw-http.el`**). Full write-up: [`docs/http-transport.md`](docs/http-transport.md).
 
 ---
 
 # Current known limitations
 
-## Synchronous requests
+## Synchronous requests (intentional for now)
 
-- `url-retrieve-synchronously` freezes Emacs for each completion round
-- **Next:** Milestone 4 — async `url-retrieve`
+- `url-retrieve-synchronously` blocks Emacs for each completion round
+- **Not a current goal:** async `url-retrieve` — synchronous behavior is acceptable; typical use is one agent task per session. Async may be revisited if multi-round tool use or streaming becomes painful
 
 ## Global conversation state
 
@@ -241,10 +254,12 @@ Multibyte text in HTTP request: POST /api/v1/chat/completions HTTP/1.1
 - No `eclaw-mode`, tool visualization, navigation, or syntax highlighting
 - **Next:** Milestone 3
 
-## Monolithic source
+## Multi-file layout ✓
 
-- All layers in one file; logical transport layer extracted (physical split to `eclaw-http.el` deferred)
-- **Next:** file split when transport section exceeds ~300 lines or async work begins
+- **`eclaw.el`** — orchestration spine (~650 lines): configuration, conversation, request assembly, chat loop, logging, UI
+- **`eclaw-skills.el`** — project skills index (~200 lines)
+- **`eclaw-tools.el`** — tool registry, handlers, dispatch, path policy (~1,080 lines)
+- **`eclaw-http.el`** — HTTP transport (~165 lines)
 
 ---
 
@@ -266,40 +281,91 @@ Or bind conversation to project root. Goals: multiple simultaneous sessions, per
 
 `eclaw-mode` on `*eclaw*`: RET to send, faces, sections, optional collapsible tool rounds, token stats.
 
-### 3. Async transport — Milestone 4
-
-Replace `url-retrieve-synchronously` with `url-retrieve` and callbacks. Prerequisite for responsive multi-round tool use and streaming.
-
-### 4. Streaming — Milestone 5
-
-Token streaming and incremental buffer updates; needs async transport and a small renderer abstraction.
-
-### 5. Stronger edit tools (optional)
+### 3. Stronger edit tools (optional)
 
 Bounded `write_file` / patch tool under the same path discipline as `notes_write_text`—not started; higher risk than read-only tools.
 
 ---
 
-# Source file layout (single file for now)
+## Deferred (not planned near-term)
 
-**Stay in `eclaw.el`** while the codebase is small and changes often span layers (orchestration + transport + tools). Revisit splitting when:
+### Async transport
 
-- work repeatedly targets **one layer** (tools, HTTP, skills) without touching the rest
-- individual sections grow past **~300–400 lines**
-- **parallel** feature work would benefit from separate files
+Replace `url-retrieve-synchronously` with `url-retrieve` and callbacks. **Optional future work** — not required for current single-task usage.
 
-When splitting, prefer **coarse files aligned to the section headers** in `eclaw.el`—not many tiny modules. Name files predictably so `PLAN.md` and grep route agents (and humans) to the right place; watch Elisp `require` order and macro/registry load order (`eclaw-deftool` before tool definitions).
+### Streaming
 
-**Suggested first cut** (matches current layers; highest ROI is `eclaw-tools.el`—registry + handlers, ~650 lines today):
+Token streaming and incremental buffer updates. Would need async transport and a small renderer abstraction. **Optional future work.**
+
+---
+
+# Source file layout — split milestone ✓
+
+Split complete (May 2026). **`eclaw.el`** is **~650 lines**; siblings **`eclaw-tools.el`** ~1,080, **`eclaw-skills.el`** ~200, **`eclaw-http.el`** ~165.
+
+## Current layout
 
 ```text
-eclaw.el            ; config, conversation builders, orchestration, UI, requires
-eclaw-tools.el      ; eclaw-deftool, registry, dispatch, all tool implementations
-eclaw-http.el       ; request payload, POST, response parsing, accessors
-eclaw-skills.el     ; project skills index (optional; ~170 lines today)
+eclaw.el            ; Commentary, Configuration, Conversation, request assembly,
+                    ; orchestration, logging UI, interactive entrypoints, `provide'
+eclaw-skills.el     ; Project skills cache, discovery, system block (~200 lines; split slice 2 ✓)
+eclaw-tools.el      ; `eclaw-deftool', registry, handlers, dispatch (~1,080 lines; split slice 3 ✓)
+eclaw-http.el       ; HTTP transport (split slice 1 ✓; ~165 lines)
 ```
 
-Later, if needed:
+Names align with **`;;;`** section boundaries in current `eclaw.el`; avoid finer fragmentation until a layer clearly owns a future feature (see “Later modules” below).
+
+## Dependency wrinkles (mandatory slice rules)
+
+1. **`eclaw-build-chat-payload`** (in **`eclaw.el`** after **`;;; Request assembly`**) calls **`eclaw-tool-definitions`**. Pure **`eclaw-http`** must **not** load **`eclaw-tools`**: (**done**) **`eclaw-http.el`** stays free of registry imports; **`eclaw-build-chat-payload`** remains in **`eclaw.el`**
+
+2. **`eclaw-system-message`** pulls **`eclaw--skills-system-block`**. **`eclaw-skills` must load before** that helper is defined — typically `(require 'eclaw-skills)` from `eclaw.el` before the `;;; Conversation` block that defines `eclaw-system-message`, **or** keep `eclaw-system-message` below the split skills file in load order.
+
+3. **`skill_write`** calls **`eclaw--invalidate-skills-cache`** (**`eclaw-tools.el`**; clears **`eclaw--skills-cache`** in **`eclaw-skills.el`**). **`eclaw-tools` requires `eclaw-skills`** (or duplicates are forbidden).
+
+4. **Macros**: keep **`eval-and-compile` helpers before `eclaw-deftool`** inside `eclaw-tools.el`; do not split the macro tail into a third file without strong reason.
+
+5. **Verification** after **each slice**: `byte-compile-file` on touched files + load `eclaw.el` in a clean `emacs -Q` / `emacs -batch`; fix forward references immediately.
+
+## Split slices (do in order; each mergeable alone)
+
+Each slice moves code only (plus `provide`/`require`s and PLAN commentary); behavior and public entrypoints unchanged.
+
+### Split slice 1 — `eclaw-http.el` ✅ **done**
+
+**Moved:** `eclaw--utf8-unibyte-string` through **`eclaw-get-tool-calls`** into **`eclaw-http.el`** (`provide` **`eclaw-http`**). Compiler silencing: **`declare-function`** / **`defvar`** for core symbols; **`eval-when-compile defvar`** for **`url-*`** buffer locals.
+
+**Left in `eclaw.el`:** **`eclaw-build-chat-payload`** after **`(require 'eclaw-tools)`** and **`(require 'eclaw-http)`**. **`(require 'url)`** removed from **`eclaw.el`** (HTTP-only).
+
+**Verify:** `emacs -batch -Q -L <repo> -f batch-byte-compile eclaw-http.el eclaw.el` and `(require 'eclaw)` (see **Handoff** below).
+
+### Split slice 2 — `eclaw-skills.el` ✅ **done**
+
+**Moved:** everything under former `;;; Project skills` (`eclaw--skills-cache` through **`eclaw--skills-system-block`**) into **`eclaw-skills.el`** (`provide` **`eclaw-skills`**). **`eclaw--invalidate-skills-cache`** moved with **`skill_write`** to **`eclaw-tools.el`** (clears **`eclaw--skills-cache`**).
+
+**`eclaw.el`:** **`(require 'eclaw-skills)`** before **`;;; Conversation`** / **`eclaw-system-message`**.
+
+**Depends:** filesystem; **`declare-function eclaw-debug-message`** from **`eclaw`**.
+
+**Verify:** `emacs -batch -Q -L <repo> -f batch-byte-compile eclaw-skills.el eclaw-http.el eclaw.el` and `(require 'eclaw)`.
+
+### Split slice 3 — `eclaw-tools.el` ✅ **done**
+
+**Moved:** **`;;; Tools` + `;;; Tool execution`** — `eclaw-deftool`, registry, `eclaw-tool-definitions`, all handlers, **`eclaw--dispatch-one-tool-call`**, **`eclaw--tool-result-messages`**, through the end of that section (up to but not including **`;;; Request assembly`**).
+
+**Top of file:** `(require 'eclaw-skills)` and handler deps (`subr-x`, `seq`, `json`).
+
+**`eclaw.el`:** `(require 'eclaw-tools)` before **`eclaw-build-chat-payload`** and **`(require 'eclaw-http)`**.
+
+**Verify:** `emacs -batch -Q -L <repo> -f batch-byte-compile eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw.el` and `(require 'eclaw)`.
+
+### Split slice 4 — Documentation / packaging hygiene ✅ **done**
+
+**Updated:** Commentary header in **`eclaw.el`** (“Layers” + load story); **`docs/http-transport.md`** (multi-file layout, `eclaw-tools` / payload split); **`README.md`** (all `eclaw-*.el` on `load-path`, smoke-test commands); this PLAN (obsolete “monolithic” / “next slice” notes removed).
+
+---
+
+## Later modules (defer until a feature owns them)
 
 ```text
 eclaw-ui.el
@@ -307,13 +373,15 @@ eclaw-logging.el
 eclaw-mode.el
 ```
 
-**AI-assisted editing:** single file keeps cross-layer call chains in one read; coarse splits help focused tasks (add a tool, fix grep, change logging) by loading less irrelevant context per turn. Sweet spot is layer-sized files, not fine-grained fragmentation.
+**AI-assisted editing:** coarse layer files shorten the buffer when changing “one layer” (`eclaw-tools.el` ≈ handlers + approvals); **`eclaw.el`** stays the orchestration spine and is still loaded for multi-layer reasoning.
 
 ---
 
 # Historical note
 
 Duplicate `eclaw-build-messages` once dropped conversation history; removed so history is always included in outgoing payloads.
+
+**Tool-call approval:** Slices A–F complete. **Multi-file split:** complete (**`eclaw-http.el`**, **`eclaw-skills.el`**, **`eclaw-tools.el`**, slice 4 docs).
 
 ---
 
@@ -352,4 +420,4 @@ The system **is** an LLM orchestration runtime for a personal assistant, not a t
 - Tool calls are **execution events** logged per HTTP round
 - Project skills are **indexed capabilities** loaded on demand via `read_file`
 
-Further evolution: async transport, isolated sessions, richer UI, and eventually a cloud-hosted runtime—without losing inspectability.
+Further evolution: isolated sessions, richer UI, and eventually a cloud-hosted runtime—without losing inspectability. Async transport and streaming are optional, not current priorities.
