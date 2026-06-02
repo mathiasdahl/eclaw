@@ -51,7 +51,7 @@ Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650
 
 - Registry: `eclaw-deftool` macro → `eclaw--tool-registry` in **`eclaw-tools.el`** (hash table; not `cl-defstruct`); plist includes `:risk` (`:read` default, `:write` for disk writes)
 - Optional leading options in `eclaw-deftool`, e.g. `(:risk :write)`, before tool body
-- **Tool approval** (complete): **`eclaw-tool-approval-mode`** (`off` / `writes` / `all`; default **`off`**), interactive/batch gate, transcript lines in **`*eclaw*`**, persisted rules in **`eclaw-data-dir/tool-approval-rules.el`** (global, project-scoped, and args-scoped keys; **`remember`** / **`remember-project`** / **`remember-exact`**); maintenance: **`eclaw-list-tool-approval-rules`**, **`eclaw-remove-tool-approval-rule`**, **`eclaw-clear-tool-approval-rules`** — see [`docs/tool-approval.md`](docs/tool-approval.md)
+- **Tool approval** (complete): **`eclaw-tool-approval-mode`** (`off` / `writes` / `all`; default **`all`**), interactive/batch gate, transcript lines in **`*eclaw*`**, persisted rules in **`eclaw-data-dir/tool-approval-rules.el`** (global, project-scoped, and args-scoped keys; **`remember`** / **`remember-project`** / **`remember-exact`**); maintenance: **`eclaw-list-tool-approval-rules`**, **`eclaw-remove-tool-approval-rule`**, **`eclaw-clear-tool-approval-rules`** — see [`docs/tool-approval.md`](docs/tool-approval.md)
 - Optional parameters via `:optional` in `eclaw-deftool`
 - Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages` (**`eclaw-tools.el`**)
 - Multi-tool per turn; multi-round loop in `eclaw-chat`
@@ -62,7 +62,7 @@ Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650
 
 | Tool | Role | `:risk` (Slice A) |
 |------|------|-------------------|
-| `read_file` | Read file text; sensitive-path policy | `:read` |
+| `read_file` | Read file text with optional `offset`/`limit` line range; sensitive-path policy; default 250-line cap | `:read` |
 | `list_directory` | Bounded directory listing (one level; not a glob search) | `:read` |
 | `grep_files` | Content search — ripgrep regex; default `files_with_matches`; gitignore-aware | `:read` |
 | `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) | `:read` |
@@ -77,6 +77,13 @@ Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650
 - **Security:** `eclaw--path-sensitive-p` on search root and every result path (post-filter after external search)
 - **Backend:** `eclaw-grep-program` (`"rg"` default) in **`eclaw-tools.el`**; caps via `head_limit` / `offset` / line truncation; `[eclaw: result limit N reached]` when truncated
 - **Config:** `eclaw-grep-program`, `eclaw-rg-respect-gitignore`, `eclaw-rg-default-head-limit` (250), `eclaw-rg-max-head-limit` (1000), `eclaw-rg-max-pattern-length` (500) — all in **`eclaw-tools.el`**
+- **`grep_files` line numbers:** only when `output_mode: content` (`filepath:linenum:content`); default `files_with_matches` returns paths only
+
+## read_file line ranges
+
+- Optional **`offset`** (1-indexed start line; negative counts from EOF) and **`limit`** (max lines)
+- Output prefixes each line with its line number (`123|content`); `[eclaw: line limit N reached]` when truncated
+- **Config:** `eclaw-read-default-line-limit` (250), `eclaw-read-max-line-limit` (1000) in **`eclaw-tools.el`**
 
 ## Project agent skills (Milestone 1b — done)
 

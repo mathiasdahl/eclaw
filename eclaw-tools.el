@@ -56,8 +56,12 @@ Populated by `eclaw-deftool'.  :risk is `:read' (default) or `:write'.")
   "When non-nil, include registered tools in outgoing chat requests.
 When nil, behave like text-only completions regardless of registry contents.")
 
-(defcustom eclaw-tool-approval-mode 'off
+(defcustom eclaw-tool-approval-mode 'all
   "How strictly to gate tool execution with `eclaw--dispatch-one-tool-call'.
+
+Default is `all' so new installs prompt before any local tool runs (reads
+and writes).  Use saved or session allow rules, or set this to `off', once
+you trust the workflow.
 
 `off' — run tools immediately (no prompts).
 
@@ -134,6 +138,14 @@ Ripgrep is preferred; when the chosen program is missing, the other is tried."
 
 (defconst eclaw-rg-max-head-limit 1000
   "Hard cap on `head_limit' for search tools (also applies when `head_limit' is 0).")
+
+(defcustom eclaw-read-default-line-limit 250
+  "Default maximum lines returned by `read_file' when `limit' is omitted."
+  :type 'integer
+  :group 'eclaw)
+
+(defconst eclaw-read-max-line-limit 1000
+  "Hard cap on lines returned by `read_file'.")
 
 (defun eclaw--canonical-path (path)
   "Return `file-truename' of expanded PATH, or nil if resolution fails."
@@ -786,30 +798,108 @@ to nil for text-only requests."
 
 ;;; Tool execution
 
-(defun eclaw-tool-read-file (path)
-  "Read the file at PATH literally and return its contents as a string.
-PATH is expanded with `expand-file-name'.  When `eclaw--path-sensitive-p'
-holds, return `eclaw--sensitive-path-msg'.  On other I/O errors, return a
+(defun eclaw--read-split-lines (file)
+  "Read FILE literally and return a list of line strings (no trailing newlines)."
+  (with-temp-buffer
+    (insert-file-contents-literally file)
+    (let ((text (buffer-string)))
+      (if (string-empty-p text)
+          nil
+        (mapcar (lambda (line)
+                  (replace-regexp-in-string "\\`\r\\'" "" line))
+                (split-string text "\n"))))))
+
+(defun eclaw--read-effective-line-limit (limit)
+  "Return positive line limit from LIMIT, default, or hard cap."
+  (let ((lim (if (and limit (integerp limit) (> limit 0))
+                 limit
+               eclaw-read-default-line-limit)))
+    (min lim eclaw-read-max-line-limit)))
+
+(defun eclaw--read-resolve-start-line (offset total-lines)
+  "Return 1-indexed start line from OFFSET and TOTAL-LINES, or nil when invalid."
+  (cond
+   ((null offset) 1)
+   ((not (integerp offset)) nil)
+   ((= offset 0) nil)
+   ((< offset 0) (max 1 (+ total-lines offset 1)))
+   (t offset)))
+
+(defun eclaw--read-format-lines (lines start-line end-line truncated-p line-limit)
+  "Format LINES from START-LINE through END-LINE (1-indexed) with line-number prefixes."
+  (let* ((width (max 6 (length (number-to-string end-line))))
+         (fmt (format "%%%dd|%%s" width))
+         (out nil)
+         (line-num start-line))
+    (while (and lines (<= line-num end-line))
+      (push (format fmt line-num (car lines)) out)
+      (setq lines (cdr lines)
+            line-num (1+ line-num)))
+    (let ((body (string-join (nreverse out) "\n")))
+      (if truncated-p
+          (concat body
+                  (format "\n[eclaw: line limit %d reached]" line-limit))
+        body))))
+
+(defun eclaw-tool-read-file (path &optional offset limit)
+  "Read the file at PATH and return numbered lines as a string.
+Optional OFFSET is a 1-indexed start line (negative counts from EOF).
+Optional LIMIT caps how many lines are returned.  When `eclaw--path-sensitive-p'
+holds, return `eclaw--sensitive-path-msg'.  On other errors, return a
 human-readable description instead of signaling."
   (let ((file (expand-file-name path)))
-    (if (eclaw--path-sensitive-p file)
-        eclaw--sensitive-path-msg
+    (cond
+     ((eclaw--path-sensitive-p file)
+      eclaw--sensitive-path-msg)
+     ((and limit (not (integerp limit)))
+      "Error: read_file limit must be an integer.")
+     ((and limit (<= limit 0))
+      "Error: read_file limit must be a positive integer.")
+     ((and offset (not (integerp offset)))
+      "Error: read_file offset must be an integer.")
+     ((and offset (= offset 0))
+      "Error: read_file offset must be >= 1 or negative (counts from end).")
+     (t
       (condition-case err
-          (with-temp-buffer
-            (insert-file-contents-literally file)
-            (buffer-string))
-        (error (format "Error reading file %S: %S" file err))))))
+          (let* ((all-lines (eclaw--read-split-lines file))
+                 (total (length all-lines))
+                 (start (eclaw--read-resolve-start-line offset total))
+                 (line-limit (eclaw--read-effective-line-limit limit))
+                 (end (min total (+ start line-limit -1)))
+                 (truncated-p (or (and limit (> limit eclaw-read-max-line-limit))
+                                  (and (null limit) (< end total)))))
+            (cond
+             ((null start)
+              "Error: read_file offset must be >= 1 or negative (counts from end).")
+             ((and (> start 0) (> start total))
+              (format "Error: read_file offset %d beyond end of file (%d lines)"
+                      start total))
+             ((zerop total)
+              "")
+             (t
+              (eclaw--read-format-lines
+               (seq-subseq all-lines (1- start) end)
+               start end truncated-p line-limit))))
+        (error (format "Error reading file %S: %S" file err)))))))
+
+
 
 (eclaw-deftool read_file
-  "Read the full text of a file from disk."
-  ((path :string "File path (absolute or relative to default directory)."))
+  "Read text from a file on disk. Optional offset/limit return a line range."
+  ((path :string "File path (absolute or relative to default directory).")
+   (offset :integer
+           "1-indexed start line. Negative counts from end (e.g. -1 = last line)."
+           :optional)
+   (limit :integer
+          "Maximum number of lines to return."
+          :optional))
   (if path
       (progn
         (when (and (not (eclaw--path-sensitive-p path))
                    (eclaw--path-is-project-skill-md-p path))
           (eclaw-debug-message "eclaw: skill file read (model loaded skill): %s"
                    (expand-file-name path)))
-        (eclaw-tool-read-file path))
+        (eclaw-tool-read-file path offset limit))
     "Error: read_file requires \"path\" in arguments."))
 
 (defun eclaw-tool-list-directory (path max-entries include-hidden)

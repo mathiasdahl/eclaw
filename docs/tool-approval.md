@@ -1,12 +1,12 @@
 # Tool call approval
 
-eclaw can gate local tool execution before handlers run (`eclaw-tool-approval-mode` in `eclaw-tools.el`). Denied or batch-denied calls still produce a normal `role: tool` message so the OpenRouter conversation trace stays valid.
+eclaw gates local tool execution before handlers run (`eclaw-tool-approval-mode` in `eclaw-tools.el`). **Every tool call is gated by default** on a fresh install. Denied or batch-denied calls still produce a normal `role: tool` message so the OpenRouter conversation trace stays valid.
 
 ## Policy
 
 | Variable | Values | Default |
 |----------|--------|---------|
-| `eclaw-tool-approval-mode` | `off`, `writes`, `all` | `off` |
+| `eclaw-tool-approval-mode` | `off`, `writes`, `all` | `all` |
 | `eclaw-tool-approval-noninteractive` | `deny`, `allow` | `deny` |
 
 Write tools (`notes_write_text`, `skill_write`, …) are tagged `:write` in the registry. With `writes`, only those tools are gated; with `all`, every registered tool is gated.
@@ -31,6 +31,7 @@ Rule keys (broad → narrow):
 - `("read_file")` — same (normalized).
 - `("read_file" "/path/to/project")` — allow in one project (directory containing `.eclaw`).
 - `("read_file" "/path/to/project" "{\"path\":\"src\"}")` — allow with canonical JSON args in that project.
+- `("read_file" "/path/to/project" "{\"path\":\"src/foo.el\",\"offset\":100,\"limit\":50}")` — allow a specific line-range read in that project.
 
 Matching uses wildcards: a stored global rule matches any project and args; a project rule matches any args in that project.
 
