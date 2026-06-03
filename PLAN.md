@@ -392,7 +392,22 @@ Duplicate `eclaw-build-messages` once dropped conversation history; removed so h
 
 ---
 
-# Future direction (not implemented)
+# Web UI (local experiment) ✓
+
+Optional browser front-end in **`eclaw-web.el`** + **`web/chat.html`**, using
+emacs-web-server on `127.0.0.1` (default port 9876):
+
+- `GET /` — chat page; `POST /api/chat` — JSON in/out, calls `eclaw-chat`
+- `POST /api/reset` — `eclaw-reset-conversation`
+- `M-x eclaw-web-start` / `eclaw-web-stop` / `eclaw-web-open`
+- Shares global `eclaw-conversation` with `*eclaw*`; tool approval `off` in web handler
+- Not auto-loaded: `(require 'eclaw-web)` after emacs-web-server is on `load-path`
+
+Limitations: blocking HTTP, no streaming, no per-client sessions (see Milestone 2).
+
+---
+
+# Future direction (not fully implemented)
 
 Cloud deployment on a personal web site:
 

@@ -46,3 +46,28 @@ scripts/eclaw-validate-elisp.sh --smoke read-file
 
 Structural Elisp edits use `~/.cursor/skills/elisp-editing/scripts/elisp-edit.sh`
 (see that skill's `SKILL.md`).
+
+## Web UI (local experiment)
+
+Optional browser chat on the same machine as Emacs, via
+[emacs-web-server](https://github.com/eschulte/emacs-web-server). Add both repos to
+`load-path`, then:
+
+```emacs-lisp
+(add-to-list 'load-path "/path/to/emacs-web-server")
+(add-to-list 'load-path "/path/to/eclaw")
+(require 'eclaw)
+(require 'eclaw-web)
+```
+
+- `M-x eclaw-web-start` — serves `http://127.0.0.1:9876/` (host and port are
+  customizable; default binds **localhost only**)
+- `M-x eclaw-web-open` — open the chat page in your browser
+- `M-x eclaw-web-stop` — stop the server
+
+The web UI calls the same `eclaw-chat` orchestration as `M-x eclaw-agent-chat` and
+shares global `eclaw-conversation` with the `*eclaw*` buffer.
+
+**Security:** do not forward this port or bind to a public interface. While handling
+web requests, `eclaw-tool-approval-mode` is forced to `off`, so local tools run
+without minibuffer prompts—acceptable only on a trusted localhost setup.

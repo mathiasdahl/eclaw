@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>eclaw</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      max-width: 48rem;
+      margin-inline: auto;
+      padding: 1rem;
+      background: #f6f6f6;
+      color: #222;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem; font-weight: 600; }
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      min-height: 12rem;
+    }
+    .msg {
+      padding: 0.65rem 0.85rem;
+      border-radius: 0.5rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user { background: #dbeafe; align-self: flex-end; max-width: 90%; }
+    .msg.assistant { background: #fff; border: 1px solid #ddd; align-self: flex-start; max-width: 95%; }
+    .msg.error { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
+    .msg.status { background: transparent; color: #666; font-style: italic; padding: 0.25rem 0; }
+    #form {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: flex-end;
+    }
+    #prompt {
+      flex: 1;
+      min-width: 12rem;
+      padding: 0.5rem 0.65rem;
+      font: inherit;
+      border: 1px solid #ccc;
+      border-radius: 0.35rem;
+    }
+    button {
+      font: inherit;
+      padding: 0.5rem 0.85rem;
+      border-radius: 0.35rem;
+      border: 1px solid #888;
+      background: #fff;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.primary { background: #2563eb; color: #fff; border-color: #1d4ed8; }
+    #toolbar { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>eclaw</h1>
+  <div id="toolbar">
+    <button type="button" id="reset">New conversation</button>
+  </div>
+  <div id="messages" aria-live="polite"></div>
+  <form id="form">
+    <textarea id="prompt" rows="2" placeholder="Message…" aria-label="Message"></textarea>
+    <button type="submit" class="primary" id="send">Send</button>
+  </form>
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const form = document.getElementById("form");
+    const promptEl = document.getElementById("prompt");
+    const sendBtn = document.getElementById("send");
+    const resetBtn = document.getElementById("reset");
+
+    function addMessage(text, className) {
+      const div = document.createElement("div");
+      div.className = "msg " + className;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function setBusy(busy) {
+      sendBtn.disabled = busy;
+      resetBtn.disabled = busy;
+      promptEl.disabled = busy;
+    }
+
+    async function postJson(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const message = promptEl.value.trim();
+      if (!message) return;
+      promptEl.value = "";
+      addMessage(message, "user");
+      setBusy(true);
+      const status = addMessage("Thinking…", "status");
+      try {
+        const { ok, data } = await postJson("/api/chat", { message });
+        status.remove();
+        if (ok && data.reply != null) {
+          addMessage(data.reply, "assistant");
+        } else {
+          addMessage(data.error || "Request failed", "error");
+        }
+      } catch (err) {
+        status.remove();
+        addMessage(String(err), "error");
+      } finally {
+        setBusy(false);
+        promptEl.focus();
+      }
+    });
+
+    resetBtn.addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        const { ok, data } = await postJson("/api/reset", {});
+        if (ok && data.ok) {
+          messagesEl.innerHTML = "";
+          addMessage("Conversation reset.", "status");
+        } else {
+          addMessage(data.error || "Reset failed", "error");
+        }
+      } catch (err) {
+        addMessage(String(err), "error");
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    promptEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+  </script>
+</body>
+</html>
