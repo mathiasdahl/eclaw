@@ -1,0 +1,13 @@
+# Emacs bytecode and native compilation
+*.elc
+*.eln
+/eln-cache/
+
+# Emacs editor artifacts
+*~
+\#*\#
+.#*
+
+# OS cruft
+.DS_Store
+Thumbs.db
