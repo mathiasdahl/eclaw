@@ -54,10 +54,12 @@
 ;;                      policy, search-tool backends
 ;;   eclaw-http.el    — OpenRouter POST and response accessors (see
 ;;                      `docs/http-transport.md')
+;;   eclaw-web-search.el — `web_search' and `web_fetch' tools (Jina by default)
 ;;
 ;; Load order in `eclaw.el': `(require 'eclaw-skills)' before conversation;
-;; `(require 'eclaw-tools)' and `(require 'eclaw-http)' before
-;; `eclaw-build-chat-payload' / `eclaw-chat'.
+;; `(require 'eclaw-tools)', `(require 'eclaw-http)', and
+;; `(require 'eclaw-web-search)' before `eclaw-build-chat-payload' /
+;; `eclaw-chat'.
 ;;
 ;; Layers (logical):
 ;;
@@ -125,6 +127,10 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "`list_directory' for a single directory listing. Patterns in `grep_files' "
    "are ripgrep regexes; escape metacharacters when searching for literal text. "
    "Use `include_ignored: true' only when gitignored or build output must be searched. "
+   "For live web information, use `web_search' (numbered results with URLs and snippets). "
+   "Session start date/time is in the system context below. "
+   "When you have a specific URL to read, use `web_fetch'. Prefer search first, then "
+   "fetch top results for detail. "
    "When the user wants durable notes, use `notes_write_text' to create or update "
    "only `.txt' files under the project's `notes/' directory (paths are relative to "
    "`notes/`; the tool prepends `YYYY-MM-DD_HHMMSS-' to the file name). When guidance "
@@ -202,6 +208,21 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
 (defvar eclaw--session-project nil
   "`default-directory' at session start, stored as an absolute path.")
+
+(defun eclaw--ensure-session-started ()
+  "Set `eclaw--session-started' and `eclaw--session-project' on first chat turn."
+  (unless eclaw--session-started
+    (setq eclaw--session-started (current-time))
+    (setq eclaw--session-project (expand-file-name default-directory))))
+
+(defun eclaw--session-context-block ()
+  "Return session-start date/time text for the system prompt, or \"\"."
+  (if eclaw--session-started
+      (let ((stamp (format-time-string "%A, %Y-%m-%d %H:%M:%S %Z"
+                                     eclaw--session-started)))
+        (format "\n\nSession context: started %s.\nUse this date for time-sensitive queries and web search, not your training cutoff."
+                stamp))
+    ""))
 
 (defun eclaw--conversation-turn-count ()
   "Return the number of user turns in `eclaw-conversation'."
@@ -344,9 +365,12 @@ When archiving fails, the session is left unchanged."
 (defun eclaw-system-message ()
   "Return one system message alist using `eclaw-system-prompt'.
 When the current `default-directory' is under a project with
-`.eclaw/skills/*/SKILL.md', append an index-only skills section."
+`.eclaw/skills/*/SKILL.md', append an index-only skills section.
+When `eclaw--session-started' is set, append a frozen session context block."
   `((role . "system")
-    (content . ,(concat eclaw-system-prompt (eclaw--skills-system-block)))))
+    (content . ,(concat eclaw-system-prompt
+                        (eclaw--skills-system-block)
+                        (eclaw--session-context-block)))))
 
 (defun eclaw-user-message (content)
   "Return a user message alist with string CONTENT."
@@ -393,6 +417,7 @@ CONTENT may be nil; it is stored as an empty string."
 
 (require 'eclaw-tools)
 (require 'eclaw-http)
+(require 'eclaw-web-search)
 
 (defun eclaw-build-chat-payload (messages)
   "Return the JSON-serializable request alist for message list MESSAGES.
@@ -434,6 +459,7 @@ conversation is left in a valid shape for the next user message.  Pending
 The user turn is appended to `eclaw-conversation' before the first
 request so history matches what was sent even when a request fails.
 Each HTTP exchange is logged."
+  (eclaw--ensure-session-started)
   (setq eclaw-conversation
         (nconc eclaw-conversation (list (eclaw-user-message prompt))))
   (let ((messages (eclaw-build-messages))
@@ -544,9 +570,6 @@ by eclaw only.
 
 PROMPT is read interactively when called as a command."
   (interactive "sPrompt: ")
-  (unless eclaw--session-started
-    (setq eclaw--session-started (current-time))
-    (setq eclaw--session-project (expand-file-name default-directory)))
   (let ((buf (get-buffer-create "*eclaw*")))
     (with-current-buffer buf
       (eclaw--eclaw-buffer-setup)

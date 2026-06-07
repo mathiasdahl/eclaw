@@ -23,7 +23,7 @@ Current model backend:
 - OpenRouter API
 - model: `deepseek/deepseek-v4-flash` (`eclaw-model`)
 
-Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650; orchestration spine), **`eclaw-tools.el`** (~1,080; registry and handlers), **`eclaw-skills.el`** (~200), **`eclaw-http.el`** (~165). Load with `(require 'eclaw)` only — see **Source file layout** below.
+Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650; orchestration spine), **`eclaw-tools.el`** (~1,080; registry and handlers), **`eclaw-skills.el`** (~200), **`eclaw-http.el`** (~200), **`eclaw-web-search.el`** (~250). Load with `(require 'eclaw)` only — see **Source file layout** below.
 
 ---
 
@@ -44,7 +44,8 @@ Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650
 - **Canonical execution trace:** `eclaw-conversation` holds user, assistant (with optional `tool_calls`), and tool messages—no system row
 - **Per-turn flow:** append user message → `eclaw-build-messages` → loop completions until plain assistant reply or a cap fires
 - **Message builders:** `eclaw-system-message`, `eclaw-user-message`, `eclaw-assistant-message`, `eclaw-tool-message`
-- **System prompt:** `eclaw-system-prompt` plus optional project skills index block
+- **System prompt:** `eclaw-system-prompt` plus optional project skills index block plus **session context block** (session-start date/time frozen for the chat session; see [`docs/session-context.md`](docs/session-context.md))
+- **Session start:** `eclaw--ensure-session-started` in `eclaw-chat` sets `eclaw--session-started` and `eclaw--session-project` on first turn; cleared by `eclaw-reset-conversation`
 - **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`, `eclaw-save-conversation`, `eclaw-list-conversations`, `eclaw-open-conversation`
 
 ## Tool calling (OpenAI/OpenRouter shape)
@@ -66,6 +67,8 @@ Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650
 | `list_directory` | Bounded directory listing (one level; not a glob search) | `:read` |
 | `grep_files` | Content search — ripgrep regex; default `files_with_matches`; gitignore-aware | `:read` |
 | `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) | `:read` |
+| `web_search` | Live web search (Jina by default; provider registry) | `:read` |
+| `web_fetch` | Fetch URL content as text (SSRF guard; Jina Reader by default) | `:read` |
 | `notes_write_text` | `.txt` only under `<project>/notes/` | `:write` |
 | `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only | `:write` |
 
@@ -78,6 +81,14 @@ Implementation: four Emacs Lisp files (~2,100 lines total): **`eclaw.el`** (~650
 - **Backend:** `eclaw-grep-program` (`"rg"` default) in **`eclaw-tools.el`**; caps via `head_limit` / `offset` / line truncation; `[eclaw: result limit N reached]` when truncated
 - **Config:** `eclaw-grep-program`, `eclaw-rg-respect-gitignore`, `eclaw-rg-default-head-limit` (250), `eclaw-rg-max-head-limit` (1000), `eclaw-rg-max-pattern-length` (500) — all in **`eclaw-tools.el`**
 - **`grep_files` line numbers:** only when `output_mode: content` (`filepath:linenum:content`); default `files_with_matches` returns paths only
+
+## Web search tools (Milestone 1d — done)
+
+- **`web_search`:** live web query via provider registry (Jina Search default); numbered title/URL/snippet results
+- **`web_fetch`:** read a specific URL via Jina Reader; SSRF guard blocks localhost, `.local`, and private/metadata IPs before HTTP
+- **Provider contract:** each provider implements search `(query max-results) -> string` and fetch `(url) -> string`; registry `eclaw--ws-provider-alist`; active provider `eclaw-web-search-provider` (default `'jina`)
+- **Config:** `eclaw-web-search-enabled`, `eclaw-jina-api-key` (`JINA_API_KEY` env, optional), `eclaw-jina-search-url`, `eclaw-jina-reader-url`, result/fetch caps — all in **`eclaw-web-search.el`**
+- **HTTP:** generic `eclaw--http-get`, `eclaw-http-read-response`, `eclaw-http-post-json` in **`eclaw-http.el`**
 
 ## read_file line ranges
 
@@ -208,6 +219,12 @@ Tool result:
 - System prompt exploration playbook; sensitive-path post-filter on all result paths
 - Verified via batch checklist (May 2026): gitignore default, all output modes, regex/multiline, caps, fallback, symlink filter
 
+## Milestone 1d — Web search (Jina) ✓
+
+- Provider-ready **`eclaw-web-search.el`**: `web_search`, `web_fetch`; Jina Search + Reader; SSRF guard on fetch
+- Generic HTTP helpers in **`eclaw-http.el`**: `eclaw--http-get`, `eclaw-http-read-response`, `eclaw-http-post-json`
+- Offline smoke: `scripts/smoke/web-search.el` (URL policy + registry)
+
 ## Tool call approval ✓
 
 Human-in-the-loop before local tools run, with persisted rules. Documented in [`docs/tool-approval.md`](docs/tool-approval.md). Slices A–F:
@@ -266,7 +283,8 @@ Multibyte text in HTTP request: POST /api/v1/chat/completions HTTP/1.1
 - **`eclaw.el`** — orchestration spine (~650 lines): configuration, conversation, request assembly, chat loop, logging, UI
 - **`eclaw-skills.el`** — project skills index (~200 lines)
 - **`eclaw-tools.el`** — tool registry, handlers, dispatch, path policy (~1,080 lines)
-- **`eclaw-http.el`** — HTTP transport (~165 lines)
+- **`eclaw-http.el`** — HTTP transport (~200 lines)
+- **`eclaw-web-search.el`** — web search/fetch tools (~250 lines)
 
 ---
 
@@ -308,7 +326,7 @@ Token streaming and incremental buffer updates. Would need async transport and a
 
 # Source file layout — split milestone ✓
 
-Split complete (May 2026). **`eclaw.el`** is **~650 lines**; siblings **`eclaw-tools.el`** ~1,080, **`eclaw-skills.el`** ~200, **`eclaw-http.el`** ~165.
+Split complete (May 2026). **`eclaw.el`** is **~650 lines**; siblings **`eclaw-tools.el`** ~1,080, **`eclaw-skills.el`** ~200, **`eclaw-http.el`** ~200, **`eclaw-web-search.el`** ~250.
 
 ## Current layout
 
@@ -317,7 +335,8 @@ eclaw.el            ; Commentary, Configuration, Conversation, request assembly,
                     ; orchestration, logging UI, interactive entrypoints, `provide'
 eclaw-skills.el     ; Project skills cache, discovery, system block (~200 lines; split slice 2 ✓)
 eclaw-tools.el      ; `eclaw-deftool', registry, handlers, dispatch (~1,080 lines; split slice 3 ✓)
-eclaw-http.el       ; HTTP transport (split slice 1 ✓; ~165 lines)
+eclaw-http.el       ; HTTP transport (split slice 1 ✓; ~200 lines)
+eclaw-web-search.el ; web search/fetch tools (Jina default; ~250 lines)
 ```
 
 Names align with **`;;;`** section boundaries in current `eclaw.el`; avoid finer fragmentation until a layer clearly owns a future feature (see “Later modules” below).

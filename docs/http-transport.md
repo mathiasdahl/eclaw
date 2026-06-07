@@ -61,7 +61,10 @@ eclaw-chat
 
 | Function | Role |
 |----------|------|
-| `eclaw--http-post` | **Single gate** for `url-request-method`, `url-request-data`, `url-request-extra-headers` |
+| `eclaw--http-post` | **Single gate** for POST (`url-request-method`, `url-request-data`, `url-request-extra-headers`) |
+| `eclaw--http-get` | GET with the same unibyte UTF-8 header encoding |
+| `eclaw-http-read-response` | Parse any HTTP buffer: require 2xx, decode UTF-8 body, kill buffer |
+| `eclaw-http-post-json` | POST a JSON alist and return a parsed JSON alist |
 | `eclaw--utf8-unibyte-string` | Encode any string as unibyte UTF-8 bytes |
 | `eclaw--http-unibyte-headers` | Map header alist values through the encoder |
 | `eclaw--assert-http-unibyte-p` | Internal check: body and headers are unibyte before send |

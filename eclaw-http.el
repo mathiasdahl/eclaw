@@ -25,11 +25,11 @@
 ;;; Commentary:
 
 ;;
-;; Low-level OpenRouter POST and response parsing: unibyte UTF-8 outgoing
-;; requests, JSON completion objects, and accessors (`eclaw-get-message', …).
-;; Request payloads that include `tools` are built in `eclaw.el' as
-;; `eclaw-build-chat-payload` (calls `eclaw-tool-definitions' from
-;; `eclaw-tools.el', loaded by `eclaw.el' before this file).
+;; Low-level HTTP POST/GET and response parsing: unibyte UTF-8 outgoing
+;; requests, JSON helpers, OpenRouter completion objects, and accessors
+;; (`eclaw-get-message', …).  Request payloads that include `tools' are built
+;; in `eclaw.el' as `eclaw-build-chat-payload` (calls `eclaw-tool-definitions'
+;; from `eclaw-tools.el', loaded by `eclaw.el' before this file).
 ;;
 ;; Regression notes: `docs/http-transport.md'.
 ;;
@@ -82,7 +82,58 @@ before calling `url-retrieve-synchronously'.  See `docs/http-transport.md'."
          (url-request-extra-headers headers)
          (url-request-data body-bytes))
     (eclaw--assert-http-unibyte-p body-bytes headers)
-    (url-retrieve-synchronously url)))
+    ;; Avoid interactive username/password prompts on HTTP 401 (e.g. Jina Search).
+    (let ((inhibit-interaction t))
+      (url-retrieve-synchronously url))))
+
+(defun eclaw--http-get (url headers)
+  "GET URL with HEADERS alist; return response buffer.
+Uses the same unibyte UTF-8 header encoding as `eclaw--http-post'.
+See `docs/http-transport.md'."
+  (let* ((headers (eclaw--http-unibyte-headers headers))
+         (url-request-method "GET")
+         (url-request-extra-headers headers)
+         (url-request-data nil))
+    (dolist (pair headers)
+      (unless (and (cdr pair) (not (multibyte-string-p (cdr pair))))
+        (error "eclaw internal error: HTTP header %S must be unibyte UTF-8"
+               (car pair))))
+    (let ((inhibit-interaction t))
+      (url-retrieve-synchronously url))))
+
+(defun eclaw-http-read-response (buffer)
+  "Parse HTTP response BUFFER: require 2xx, decode UTF-8 body, kill BUFFER.
+Return the response body as a string.  Signal when BUFFER is nil or status is
+outside 2xx."
+  (unless buffer
+    (error "eclaw: HTTP request failed before a response was available"))
+  (with-current-buffer buffer
+    (let ((status (or url-http-response-status -1)))
+      (unless (and (integerp status) (<= 200 status 299))
+        (let ((body (eclaw--response-error-body buffer)))
+          (kill-buffer buffer)
+          (error "eclaw: HTTP %s:\n%s"
+                 status
+                 (if (> (length body) 500)
+                     (concat (substring body 0 500) "…")
+                   body)))))
+    (goto-char url-http-end-of-headers)
+    (set-buffer-multibyte t)
+    (decode-coding-region (point) (point-max) 'utf-8)
+    (let ((body (buffer-substring-no-properties (point) (point-max))))
+      (kill-buffer buffer)
+      body)))
+
+(defun eclaw-http-post-json (url headers body-alist)
+  "POST JSON-encoded BODY-ALIST to URL with HEADERS; return parsed JSON alist.
+Uses `eclaw--http-post' and `eclaw-http-read-response'.  JSON keys are symbols."
+  (let* ((body (json-encode body-alist))
+         (buffer (eclaw--http-post url headers body))
+         (text (eclaw-http-read-response buffer)))
+    (let ((json-object-type 'alist)
+          (json-array-type 'list)
+          (json-key-type 'symbol))
+      (json-read-from-string text))))
 
 (defun eclaw-post-completion-request (payload)
   "POST PAYLOAD to OpenRouter chat completions; return parsed JSON alist.

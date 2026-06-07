@@ -126,12 +126,6 @@ When nil, uses `eclaw--session-project' or `default-directory' at request time."
       (json-error
        (signal 'error (list "invalid JSON" (error-message-string json-err)))))))
 
-(defun eclaw-web--ensure-session ()
-  "Set session markers on first web chat, mirroring `eclaw-agent-chat'."
-  (unless eclaw--session-started
-    (setq eclaw--session-started (current-time))
-    (setq eclaw--session-project (eclaw-web--project-root))))
-
 (defun eclaw-web--append-transcript (prompt reply)
   "Append a user/assistant exchange to `*eclaw*' when possible."
   (let ((buf (get-buffer-create "*eclaw*")))
@@ -158,7 +152,6 @@ When nil, uses `eclaw--session-project' or `default-directory' at request time."
                (message (alist-get 'message data)))
           (if (and message (stringp message) (not (string-empty-p message)))
               (progn
-                (eclaw-web--ensure-session)
                 (let ((reply
                        (eclaw-web--with-web-context
                         (lambda () (eclaw-chat message)))))
