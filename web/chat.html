@@ -4,21 +4,195 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>eclaw</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
+
+    :root {
+      --bg: #f6f6f6;
+      --text: #222;
+      --text-dim: #666;
+      --border: #ccc;
+      --border-strong: #888;
+      --msg-user-bg: #dbeafe;
+      --msg-assistant-bg: #fff;
+      --msg-assistant-border: #ddd;
+      --msg-error-bg: #fee2e2;
+      --msg-error-border: #fca5a5;
+      --msg-error-text: #991b1b;
+      --btn-bg: #fff;
+      --btn-primary-bg: #2563eb;
+      --btn-primary-text: #fff;
+      --btn-primary-border: #1d4ed8;
+      --input-bg: #fff;
+      --radius: 0.5rem;
+      --radius-sm: 0.35rem;
+      --font: system-ui, sans-serif;
+      --glow: none;
+      --content-max: 48rem;
+      --scanlines: none;
+      --vignette: none;
+      --msg-prefix-display: none;
+      --terminal-frame: none;
+      --cursor-blink: none;
+      --reveal-anim: none;
+    }
+
+    [data-theme="matrix-subtle"],
+    [data-theme="matrix-medium"],
+    [data-theme="matrix-full"] {
+      --bg: #0a0a0a;
+      --text: #00ff41;
+      --text-dim: #008f11;
+      --border: #003b00;
+      --border-strong: #00ff41;
+      --msg-user-bg: rgba(0, 59, 0, 0.45);
+      --msg-assistant-bg: rgba(0, 0, 0, 0.6);
+      --msg-assistant-border: #003b00;
+      --msg-error-bg: rgba(80, 0, 20, 0.5);
+      --msg-error-border: #ff0040;
+      --msg-error-text: #ff4060;
+      --btn-bg: #0a0a0a;
+      --btn-primary-bg: #003b00;
+      --btn-primary-text: #00ff41;
+      --btn-primary-border: #00ff41;
+      --input-bg: #0a0a0a;
+      --radius: 0;
+      --radius-sm: 0;
+      --font: "Share Tech Mono", "Courier New", monospace;
+      --glow: 0 0 8px rgba(0, 255, 65, 0.6);
+    }
+
+    [data-theme="matrix-medium"],
+    [data-theme="matrix-full"] {
+      --scanlines: block;
+      --vignette: block;
+      --msg-prefix-display: block;
+      --terminal-frame: 1px solid var(--border);
+      --cursor-blink: blink 1s step-end infinite;
+    }
+
+    [data-theme="matrix-full"] {
+      --content-max: 48rem;
+      --reveal-anim: matrixReveal 0.4s ease-out;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      [data-theme="matrix-medium"],
+      [data-theme="matrix-full"] {
+        --cursor-blink: none;
+        --reveal-anim: none;
+      }
+    }
+
+    html {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+    }
+
     body {
-      font-family: system-ui, sans-serif;
       margin: 0;
-      max-width: 48rem;
+      max-width: var(--content-max);
       margin-inline: auto;
       padding: 1rem;
-      background: #f6f6f6;
-      color: #222;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      position: relative;
     }
-    h1 { font-size: 1.25rem; margin: 0 0 1rem; font-weight: 600; }
+
+    [data-theme="matrix-full"] body {
+      max-width: none;
+      padding: 0;
+      background: transparent;
+    }
+
+    [data-theme="matrix-full"] .terminal-window {
+      max-width: var(--content-max);
+      margin: 1.5rem auto;
+      padding: 1rem;
+      border: 1px solid var(--border);
+      background: rgba(10, 10, 10, 0.92);
+      box-shadow: var(--glow), inset 0 0 40px rgba(0, 255, 65, 0.03);
+      min-height: calc(100vh - 3rem);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      z-index: 1;
+    }
+
+    body::before {
+      content: "";
+      display: var(--scanlines);
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 100;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.15) 0px,
+        rgba(0, 0, 0, 0.15) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+      opacity: 0.35;
+    }
+
+    body::after {
+      content: "";
+      display: var(--vignette);
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 99;
+      background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.55) 100%);
+    }
+
+    #matrix-rain {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      opacity: 0.2;
+      pointer-events: none;
+    }
+
+    [data-theme="matrix-full"] #matrix-rain.active {
+      display: block;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      [data-theme="matrix-full"] #matrix-rain.active {
+        display: none;
+      }
+    }
+
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 0.25rem;
+      font-weight: 600;
+      text-shadow: var(--glow);
+      letter-spacing: 0.05em;
+    }
+
+    .subtitle {
+      display: none;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin: 0 0 1rem;
+    }
+
+    [data-theme="matrix-subtle"] .subtitle,
+    [data-theme="matrix-medium"] .subtitle,
+    [data-theme="matrix-full"] .subtitle {
+      display: block;
+    }
+
     #messages {
       flex: 1;
       overflow-y: auto;
@@ -28,60 +202,355 @@
       margin-bottom: 1rem;
       min-height: 12rem;
     }
+
     .msg {
       padding: 0.65rem 0.85rem;
-      border-radius: 0.5rem;
+      border-radius: var(--radius);
       line-height: 1.45;
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .msg.user { background: #dbeafe; align-self: flex-end; max-width: 90%; }
-    .msg.assistant { background: #fff; border: 1px solid #ddd; align-self: flex-start; max-width: 95%; }
-    .msg.error { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
-    .msg.status { background: transparent; color: #666; font-style: italic; padding: 0.25rem 0; }
+
+    .msg.user {
+      background: var(--msg-user-bg);
+      align-self: flex-end;
+      max-width: 90%;
+    }
+
+    [data-theme="matrix-subtle"] .msg.user,
+    [data-theme="matrix-medium"] .msg.user,
+    [data-theme="matrix-full"] .msg.user {
+      border: 1px solid var(--border);
+    }
+
+    .msg.assistant {
+      background: var(--msg-assistant-bg);
+      border: 1px solid var(--msg-assistant-border);
+      align-self: flex-start;
+      max-width: 95%;
+      animation: var(--reveal-anim);
+    }
+
+    .msg.error {
+      background: var(--msg-error-bg);
+      border: 1px solid var(--msg-error-border);
+      color: var(--msg-error-text);
+    }
+
+    .msg.status {
+      background: transparent;
+      color: var(--text-dim);
+      font-style: italic;
+      padding: 0.25rem 0;
+      border: none;
+    }
+
+    [data-theme="matrix-medium"] .msg.user::before,
+    [data-theme="matrix-full"] .msg.user::before {
+      display: var(--msg-prefix-display);
+      content: "> YOU: ";
+      color: var(--text-dim);
+    }
+
+    [data-theme="matrix-medium"] .msg.assistant::before,
+    [data-theme="matrix-full"] .msg.assistant::before {
+      display: var(--msg-prefix-display);
+      content: "> ECLAW: ";
+      color: var(--text-dim);
+    }
+
+    @keyframes matrixReveal {
+      from { opacity: 0; filter: brightness(2); }
+      to { opacity: 1; filter: brightness(1); }
+    }
+
+    @keyframes blink {
+      50% { box-shadow: 0 0 0 1px var(--text), var(--glow); }
+    }
+
     #form {
       display: flex;
       gap: 0.5rem;
       flex-wrap: wrap;
       align-items: flex-end;
+      border: var(--terminal-frame);
+      padding: var(--terminal-frame-pad, 0);
     }
+
+    [data-theme="matrix-medium"] #form,
+    [data-theme="matrix-full"] #form {
+      --terminal-frame-pad: 0.65rem;
+    }
+
     #prompt {
       flex: 1;
       min-width: 12rem;
       padding: 0.5rem 0.65rem;
       font: inherit;
-      border: 1px solid #ccc;
-      border-radius: 0.35rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--input-bg);
+      color: var(--text);
+      caret-color: var(--text);
     }
+
+    [data-theme="matrix-medium"] #prompt:focus,
+    [data-theme="matrix-full"] #prompt:focus {
+      outline: none;
+      border-color: var(--border-strong);
+      animation: var(--cursor-blink);
+    }
+
+    #prompt::placeholder {
+      color: var(--text-dim);
+    }
+
     button {
       font: inherit;
       padding: 0.5rem 0.85rem;
-      border-radius: 0.35rem;
-      border: 1px solid #888;
-      background: #fff;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong);
+      background: var(--btn-bg);
+      color: var(--text);
       cursor: pointer;
     }
+
+    button:focus-visible,
+    select:focus-visible,
+    #prompt:focus-visible {
+      outline: 2px solid var(--btn-primary-border);
+      outline-offset: 2px;
+    }
+
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: #2563eb; color: #fff; border-color: #1d4ed8; }
-    #toolbar { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+
+    button.primary {
+      background: var(--btn-primary-bg);
+      color: var(--btn-primary-text);
+      border-color: var(--btn-primary-border);
+      text-shadow: var(--glow);
+    }
+
+    [data-theme="matrix-subtle"] button.primary:hover:not(:disabled),
+    [data-theme="matrix-medium"] button.primary:hover:not(:disabled),
+    [data-theme="matrix-full"] button.primary:hover:not(:disabled) {
+      background: #00ff41;
+      color: #0a0a0a;
+      box-shadow: var(--glow);
+    }
+
+    [data-theme="matrix-subtle"] button:hover:not(:disabled):not(.primary),
+    [data-theme="matrix-medium"] button:hover:not(:disabled):not(.primary),
+    [data-theme="matrix-full"] button:hover:not(:disabled):not(.primary) {
+      box-shadow: var(--glow);
+    }
+
+    #toolbar {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .theme-label {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
+    #theme-select {
+      font: inherit;
+      padding: 0.45rem 0.65rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong);
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    @keyframes glitchFlicker {
+      0%, 100% { opacity: 1; }
+      20% { opacity: 0.85; }
+      40% { opacity: 1; }
+      60% { opacity: 0.9; }
+    }
+
+    [data-theme="matrix-full"].glitch-load .terminal-window {
+      animation: glitchFlicker 0.2s ease-out;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      [data-theme="matrix-full"].glitch-load .terminal-window {
+        animation: none;
+      }
+    }
   </style>
 </head>
 <body>
-  <h1>eclaw</h1>
-  <div id="toolbar">
-    <button type="button" id="reset">New conversation</button>
+  <canvas id="matrix-rain" aria-hidden="true"></canvas>
+  <div class="terminal-window">
+    <h1>eclaw</h1>
+    <p class="subtitle">// localhost interface</p>
+    <div id="toolbar">
+      <button type="button" id="reset">New conversation</button>
+      <label class="theme-label" for="theme-select">Theme</label>
+      <select id="theme-select" aria-label="Theme">
+        <option value="default">Default</option>
+        <option value="matrix-subtle">Matrix (subtle)</option>
+        <option value="matrix-medium">Matrix (terminal)</option>
+        <option value="matrix-full">Matrix (full)</option>
+      </select>
+    </div>
+    <div id="messages" aria-live="polite"></div>
+    <form id="form">
+      <textarea id="prompt" rows="2" placeholder="Message…" aria-label="Message"></textarea>
+      <button type="submit" class="primary" id="send">Send</button>
+    </form>
   </div>
-  <div id="messages" aria-live="polite"></div>
-  <form id="form">
-    <textarea id="prompt" rows="2" placeholder="Message…" aria-label="Message"></textarea>
-    <button type="submit" class="primary" id="send">Send</button>
-  </form>
   <script>
     const messagesEl = document.getElementById("messages");
     const form = document.getElementById("form");
     const promptEl = document.getElementById("prompt");
     const sendBtn = document.getElementById("send");
     const resetBtn = document.getElementById("reset");
+    const themeSelect = document.getElementById("theme-select");
+    const rainCanvas = document.getElementById("matrix-rain");
+    const THEME_KEY = "eclaw-theme";
+
+    const COPY = {
+      default: {
+        thinking: "Thinking…",
+        reset: "New conversation",
+        resetOk: "Conversation reset.",
+        placeholder: "Message…",
+      },
+      matrix: {
+        thinking: "Processing stream…",
+        reset: "Jack out",
+        resetOk: "Session terminated.",
+        placeholder: "Enter transmission…",
+      },
+    };
+
+    function isMatrixTheme(theme) {
+      return theme && theme.startsWith("matrix-");
+    }
+
+    function effectiveTheme(requested) {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        if (requested === "matrix-medium" || requested === "matrix-full") {
+          return "matrix-subtle";
+        }
+      }
+      return requested || "default";
+    }
+
+    function themeCopy(key) {
+      const theme = document.documentElement.dataset.theme || "default";
+      const bucket = isMatrixTheme(theme) ? COPY.matrix : COPY.default;
+      return bucket[key];
+    }
+
+    function applyThemeCopy() {
+      resetBtn.textContent = themeCopy("reset");
+      promptEl.placeholder = themeCopy("placeholder");
+    }
+
+    let rainAnim = null;
+    let rainVisible = true;
+
+    function stopMatrixRain() {
+      if (rainAnim != null) {
+        cancelAnimationFrame(rainAnim);
+        rainAnim = null;
+      }
+      rainCanvas.classList.remove("active");
+    }
+
+    function startMatrixRain() {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+      const ctx = rainCanvas.getContext("2d");
+      const chars = "ｦｱｳｴｵｶｷｹｺｻｼｽｾｿ0123456789ABCDEF";
+      let columns = [];
+      let fontSize = 14;
+
+      function resize() {
+        rainCanvas.width = window.innerWidth;
+        rainCanvas.height = window.innerHeight;
+        fontSize = Math.max(12, Math.floor(window.innerWidth / 80));
+        const colCount = Math.ceil(rainCanvas.width / fontSize);
+        columns = Array.from({ length: colCount }, () => Math.random() * -50);
+      }
+
+      function draw() {
+        if (!rainCanvas.classList.contains("active")) return;
+        ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+        ctx.fillRect(0, 0, rainCanvas.width, rainCanvas.height);
+        ctx.fillStyle = "#00ff41";
+        ctx.font = fontSize + "px monospace";
+
+        for (let i = 0; i < columns.length; i++) {
+          const char = chars[Math.floor(Math.random() * chars.length)];
+          const x = i * fontSize;
+          const y = columns[i] * fontSize;
+          ctx.fillText(char, x, y);
+          if (y > rainCanvas.height && Math.random() > 0.975) {
+            columns[i] = 0;
+          }
+          columns[i] += 0.5 + Math.random() * 0.5;
+        }
+
+        if (rainVisible) {
+          rainAnim = requestAnimationFrame(draw);
+        }
+      }
+
+      resize();
+      rainCanvas.classList.add("active");
+      draw();
+
+      if (!startMatrixRain._bound) {
+        startMatrixRain._bound = true;
+        window.addEventListener("resize", () => {
+          if (rainCanvas.classList.contains("active")) resize();
+        });
+        document.addEventListener("visibilitychange", () => {
+          rainVisible = document.visibilityState === "visible";
+          if (rainVisible && rainCanvas.classList.contains("active") && rainAnim == null) {
+            draw();
+          }
+        });
+      }
+    }
+
+    function applyTheme(requested) {
+      const theme = effectiveTheme(requested);
+      document.documentElement.dataset.theme = theme;
+      if (themeSelect.value !== requested) {
+        themeSelect.value = requested;
+      }
+      localStorage.setItem(THEME_KEY, requested);
+      applyThemeCopy();
+
+      stopMatrixRain();
+      if (theme === "matrix-full") {
+        document.documentElement.classList.add("glitch-load");
+        setTimeout(() => document.documentElement.classList.remove("glitch-load"), 200);
+        startMatrixRain();
+      }
+    }
+
+    (function initTheme() {
+      const saved = localStorage.getItem(THEME_KEY) || "default";
+      themeSelect.value = saved;
+      applyTheme(saved);
+    })();
+
+    themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
+
+    window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", () => {
+      applyTheme(themeSelect.value);
+    });
 
     function addMessage(text, className) {
       const div = document.createElement("div");
@@ -115,7 +584,7 @@
       promptEl.value = "";
       addMessage(message, "user");
       setBusy(true);
-      const status = addMessage("Thinking…", "status");
+      const status = addMessage(themeCopy("thinking"), "status");
       try {
         const { ok, data } = await postJson("/api/chat", { message });
         status.remove();
@@ -139,7 +608,7 @@
         const { ok, data } = await postJson("/api/reset", {});
         if (ok && data.ok) {
           messagesEl.innerHTML = "";
-          addMessage("Conversation reset.", "status");
+          addMessage(themeCopy("resetOk"), "status");
         } else {
           addMessage(data.error || "Reset failed", "error");
         }

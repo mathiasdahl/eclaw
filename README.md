@@ -47,6 +47,55 @@ emacs -batch -Q -L /path/to/eclaw -f batch-byte-compile \
 emacs -batch -Q -L /path/to/eclaw --eval "(require 'eclaw)"
 ```
 
+## Headless batch scripts
+
+There is no first-class CLI. For scripted or CI use, call `eclaw-chat` from
+batch Emacs with `--eval` or a small personal script loaded via `-l`.
+
+Quick one-liner (the eval hack):
+
+```bash
+export OPENROUTER_API_KEY=…   # or set eclaw-api-key in --eval
+emacs -batch -Q -L /path/to/eclaw \
+  --eval "(require 'eclaw)" \
+  --eval "(setq eclaw-tool-approval-mode 'off)" \
+  --eval "(princ (eclaw-chat \"Summarize README.md\"))"
+```
+
+In batch/noninteractive Emacs, gated tools follow
+`eclaw-tool-approval-noninteractive` (default `deny`). For scripted jobs, set
+`eclaw-tool-approval-mode` to `off` or `eclaw-tool-approval-noninteractive`
+to `allow`. See [`docs/tool-approval.md`](docs/tool-approval.md).
+
+For anything beyond a one-off, keep setup in a script (for example
+`~/eclaw-headless.el`) and pass the prompt from the shell:
+
+```emacs-lisp
+(add-to-list 'load-path "/path/to/eclaw")
+(require 'eclaw)
+(setq eclaw-tool-approval-mode 'off)
+
+(let ((prompt (or (getenv "ECLAW_PROMPT")
+                  (car command-line-args-left))))
+  (unless prompt (error "pass PROMPT as an argument or set ECLAW_PROMPT"))
+  (princ (eclaw-chat prompt)))
+```
+
+Positional argument — args after `-l` are in `command-line-args-left`:
+
+```bash
+emacs -batch -Q -l ~/eclaw-headless.el "Summarize README.md"
+```
+
+Environment variable — useful when shell-quoting the prompt is awkward:
+
+```bash
+ECLAW_PROMPT='Summarize README.md' emacs -batch -Q -l ~/eclaw-headless.el
+```
+
+In the script, `(getenv "ECLAW_PROMPT")` reads the variable;
+`(car command-line-args-left)` is the first argument after the script name.
+
 Project validation wrapper (uses the personal `elisp-editing` skill scripts):
 
 ```bash
