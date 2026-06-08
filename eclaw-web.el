@@ -69,11 +69,19 @@ When nil, uses `eclaw--session-project' or `default-directory' at request time."
   :type 'string
   :group 'eclaw-web)
 
+(defcustom eclaw-web-root nil
+  "Directory containing `eclaw-web.el' and the `web/' subdirectory.
+When nil, derived from where `eclaw-web.el' was loaded from (or `load-path').
+Set this when static assets are not found (for example after `(require 'eclaw-web)'
+from a scratch buffer with a surprising `default-directory')."
+  :type 'string
+  :group 'eclaw-web)
+
 (defvar eclaw-web-server nil
   "The active `ws-server' object, or nil when stopped.")
 
 (defvar eclaw-web--data-dir nil
-  "Directory containing `web/chat.html', set from `load-file-name'.")
+  "Cached eclaw install directory; set from `load-file-name' when this file loads.")
 
 (declare-function eclaw--eclaw-buffer-append "eclaw" (text))
 (declare-function eclaw--eclaw-buffer-setup "eclaw" ())
@@ -81,15 +89,33 @@ When nil, uses `eclaw--session-project' or `default-directory' at request time."
 (declare-function eclaw-reset-conversation "eclaw" ())
 
 (defun eclaw-web--data-dir ()
-  "Return the directory holding static web assets."
-  (or eclaw-web--data-dir
-      (file-name-directory (or load-file-name buffer-file-name default-directory))))
+  "Return the directory holding static web assets (`web/' under the eclaw repo)."
+  (or (and eclaw-web-root
+           (progn
+             (let ((root (expand-file-name eclaw-web-root)))
+               (unless (file-directory-p root)
+                 (error "eclaw-web-root is not a directory: %s" root))
+               root)))
+      eclaw-web--data-dir
+      (when-let ((file (locate-file "eclaw-web.el" load-path)))
+        (setq eclaw-web--data-dir (file-name-directory file)))
+      (error "Cannot find eclaw web assets; add eclaw to `load-path' or set `eclaw-web-root'")))
+
+(defun eclaw-web--asset-path (name)
+  "Return absolute path for web asset NAME (for example \"chat.html\")."
+  (expand-file-name (concat "web/" name) (eclaw-web--data-dir)))
+
+(defun eclaw-web--check-assets ()
+  "Signal an error unless `web/chat.html' exists under `eclaw-web--data-dir'."
+  (let ((chat-html (eclaw-web--asset-path "chat.html")))
+    (unless (file-readable-p chat-html)
+      (error "eclaw-web: missing %s; set `eclaw-web-root' to the eclaw repo directory"
+             chat-html))))
 
 (defun eclaw-web--read-file (name)
   "Return the unibyte contents of NAME under `eclaw-web--data-dir'/web/."
   (with-temp-buffer
-    (insert-file-contents-literally
-     (expand-file-name (concat "web/" name) (eclaw-web--data-dir)))
+    (insert-file-contents-literally (eclaw-web--asset-path name))
     (buffer-string)))
 
 (defun eclaw-web--project-root ()
@@ -191,13 +217,11 @@ When nil, uses `eclaw--session-project' or `default-directory' at request time."
   (interactive)
   (when eclaw-web-server
     (user-error "eclaw web server already running at %s" (eclaw-web--url)))
-  (let ((file (or load-file-name (locate-file "eclaw-web.el" load-path))))
-    (unless file (error "Cannot find eclaw-web.el on load-path"))
-    (setq eclaw-web--data-dir (file-name-directory file)))
+  (eclaw-web--check-assets)
   (setq eclaw-web-server
         (ws-start #'eclaw-web--handle-request eclaw-web-port nil
                   :host eclaw-web-host))
-  (message "eclaw web: %s" (eclaw-web--url)))
+  (message "eclaw web: %s (assets from %s)" (eclaw-web--url) (eclaw-web--data-dir)))
 
 ;;;###autoload
 (defun eclaw-web-stop ()
@@ -215,6 +239,9 @@ When nil, uses `eclaw--session-project' or `default-directory' at request time."
   (unless eclaw-web-server
     (user-error "eclaw web server is not running; use `eclaw-web-start' first"))
   (browse-url (eclaw-web--url)))
+
+(when load-file-name
+  (setq eclaw-web--data-dir (file-name-directory load-file-name)))
 
 (provide 'eclaw-web)
 ;;; eclaw-web.el ends here

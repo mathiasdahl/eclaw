@@ -127,6 +127,14 @@ Optional browser chat on the same machine as Emacs, via
 - `M-x eclaw-web-open` — open the chat page in your browser
 - `M-x eclaw-web-stop` — stop the server
 
+Static files (`web/chat.html`) are loaded from the eclaw repo directory that
+contains `eclaw-web.el`, not from Emacs's `default-directory`. If startup fails
+with a missing `web/chat.html`, set `eclaw-web-root` to your eclaw clone:
+
+```emacs-lisp
+(setq eclaw-web-root "/path/to/eclaw")
+```
+
 The web UI calls the same `eclaw-chat` orchestration as `M-x eclaw-agent-chat` and
 shares global `eclaw-conversation` with the `*eclaw*` buffer.
 
