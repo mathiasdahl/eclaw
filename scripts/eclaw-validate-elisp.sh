@@ -42,9 +42,12 @@ run_smoke() {
     session-context)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/session-context.el"
       ;;
+    send-email)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/send-email.el"
+      ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context" >&2
+      echo "Known: read-file, load, web-search, session-context, send-email" >&2
       exit 2
       ;;
   esac
@@ -78,7 +81,7 @@ case "$action" in
     ;;
   --compile)
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw.el
+      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw.el
     ;;
   --require)
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
@@ -91,7 +94,7 @@ case "$action" in
     [[ $# -ge 1 ]] || { echo "--all requires at least one FILE" >&2; exit 2; }
     "$VALIDATE" --parens "$@"
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw.el
+      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw.el
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
     ;;
   -h|--help)

@@ -55,11 +55,11 @@
 ;;   eclaw-http.el    — OpenRouter POST and response accessors (see
 ;;                      `docs/http-transport.md')
 ;;   eclaw-web-search.el — `web_search' and `web_fetch' tools (Jina by default)
+;;   eclaw-mail.el      — `send_email' tool (work/home only via `mailme-mail')
 ;;
 ;; Load order in `eclaw.el': `(require 'eclaw-skills)' before conversation;
-;; `(require 'eclaw-tools)', `(require 'eclaw-http)', and
-;; `(require 'eclaw-web-search)' before `eclaw-build-chat-payload' /
-;; `eclaw-chat'.
+;; `(require 'eclaw-tools)', `(require 'eclaw-http)', `(require 'eclaw-web-search)',
+;; and `(require 'eclaw-mail)' before `eclaw-build-chat-payload' / `eclaw-chat'.
 ;;
 ;; Layers (logical):
 ;;
@@ -429,6 +429,7 @@ CONTENT may be nil; it is stored as an empty string."
 (require 'eclaw-tools)
 (require 'eclaw-http)
 (require 'eclaw-web-search)
+(require 'eclaw-mail)
 
 (defun eclaw-build-chat-payload (messages)
   "Return the JSON-serializable request alist for message list MESSAGES.

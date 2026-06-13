@@ -12,7 +12,7 @@ few hours of working with AI to create this project.
 
 Clone the repo and add its directory to `load-path`. All sibling
 `eclaw-*.el` files (`eclaw.el`, `eclaw-skills.el`, `eclaw-tools.el`,
-`eclaw-http.el`, `eclaw-web-search.el`) must live in that directory; only the core feature
+`eclaw-http.el`, `eclaw-web-search.el`, `eclaw-mail.el`) must live in that directory; only the core feature
 needs to be required:
 
 ```emacs-lisp
@@ -20,13 +20,24 @@ needs to be required:
 (require 'eclaw)
 ```
 
-`(require 'eclaw)` pulls in skills, tools, HTTP transport, and web search in order.
-After a successful load, `(featurep 'eclaw-http)` and `(featurep 'eclaw-web-search)`
-should be non-nil.
+`(require 'eclaw)` pulls in skills, tools, HTTP transport, web search, and mail in order.
+After a successful load, `(featurep 'eclaw-http)`, `(featurep 'eclaw-web-search)`, and
+`(featurep 'eclaw-mail)` should be non-nil.
 
 Set `JINA_API_KEY` for Jina web tools (free key at https://jina.ai/?sui=apikey).
 `web_search` requires it; `web_fetch` works without a key but benefits from one
 for higher rate limits.
+
+Configure `send_email` in init.el (addresses are not exposed to the model):
+
+```emacs-lisp
+(setq eclaw-mail-work-address "you@company.example")
+(setq eclaw-mail-home-address "you@gmail.com")
+```
+
+The tool calls your personal `mailme-mail` function, which must be loaded before
+sending. Recipient is restricted to `work` or `home` only. Tagged `:write` — always
+approval-gated under default `eclaw-tool-approval-mode`.
 
 Tool approval is **on by default** (`eclaw-tool-approval-mode` is `all`): every
 local tool call prompts in the minibuffer until you allow it once, for the
@@ -43,7 +54,7 @@ Smoke-test (optional):
 
 ```bash
 emacs -batch -Q -L /path/to/eclaw -f batch-byte-compile \
-  eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw.el
+  eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw.el
 emacs -batch -Q -L /path/to/eclaw --eval "(require 'eclaw)"
 ```
 
@@ -103,6 +114,7 @@ scripts/eclaw-validate-elisp.sh --all eclaw-tools.el
 scripts/eclaw-validate-elisp.sh --smoke read-file
 scripts/eclaw-validate-elisp.sh --smoke load
 scripts/eclaw-validate-elisp.sh --smoke web-search
+scripts/eclaw-validate-elisp.sh --smoke send-email
 scripts/eclaw-validate-elisp.sh --smoke session-context
 ```
 

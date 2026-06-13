@@ -69,6 +69,7 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 | `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) | `:read` |
 | `web_search` | Live web search (Jina by default; provider registry) | `:read` |
 | `web_fetch` | Fetch URL content as text (SSRF guard; Jina Reader by default) | `:read` |
+| `send_email` | Send email to configured work or home address only (`mailme-mail` backend) | `:write` |
 | `notes_write_text` | `.txt` only under `<project>/notes/` | `:write` |
 | `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only | `:write` |
 
@@ -89,6 +90,13 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - **Provider contract:** each provider implements search `(query max-results) -> string` and fetch `(url) -> string`; registry `eclaw--ws-provider-alist`; active provider `eclaw-web-search-provider` (default `'jina`)
 - **Config:** `eclaw-web-search-enabled`, `eclaw-jina-api-key` (`JINA_API_KEY` env, optional), `eclaw-jina-search-url`, `eclaw-jina-reader-url`, result/fetch caps — all in **`eclaw-web-search.el`**
 - **HTTP:** generic `eclaw--http-get`, `eclaw-http-read-response`, `eclaw-http-post-json` in **`eclaw-http.el`**
+
+## Email tool (Milestone — done)
+
+- **`send_email`:** send plain-text mail to configured **work** or **home** address only; recipient enum in JSON schema; `:write` risk
+- **Backend:** user's personal `mailme-mail` (body address); not defined in eclaw
+- **Config:** `eclaw-mail-enabled`, `eclaw-mail-work-address`, `eclaw-mail-home-address` — all in **`eclaw-mail.el`**
+- **Smoke:** `scripts/smoke/send-email.el` (offline; stubs `mailme-mail`)
 
 ## read_file line ranges
 

@@ -11,6 +11,9 @@
 (unless (featurep 'eclaw-web-search)
   (error "smoke load: eclaw-web-search feature missing"))
 
+(unless (featurep 'eclaw-mail)
+  (error "smoke load: eclaw-mail feature missing"))
+
 (unless (fboundp 'eclaw-chat)
   (error "smoke load: eclaw-chat not bound"))
 
