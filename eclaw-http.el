@@ -41,6 +41,7 @@
 
 ;; Runtime: `eclaw' is loaded first; these quiet `batch-byte-compile'.
 (defvar eclaw-debug)
+(defvar eclaw-url-show-status)
 (declare-function eclaw-debug-message "eclaw" (format-string &rest args))
 (declare-function eclaw-get-api-key "eclaw" ())
 
@@ -83,7 +84,9 @@ before calling `url-retrieve-synchronously'.  See `docs/http-transport.md'."
          (url-request-data body-bytes))
     (eclaw--assert-http-unibyte-p body-bytes headers)
     ;; Avoid interactive username/password prompts on HTTP 401 (e.g. Jina Search).
-    (let ((inhibit-interaction t))
+    (let ((url-show-status (and (boundp 'eclaw-url-show-status)
+                                eclaw-url-show-status))
+          (inhibit-interaction t))
       (url-retrieve-synchronously url))))
 
 (defun eclaw--http-get (url headers)
@@ -98,7 +101,9 @@ See `docs/http-transport.md'."
       (unless (and (cdr pair) (not (multibyte-string-p (cdr pair))))
         (error "eclaw internal error: HTTP header %S must be unibyte UTF-8"
                (car pair))))
-    (let ((inhibit-interaction t))
+    (let ((url-show-status (and (boundp 'eclaw-url-show-status)
+                                eclaw-url-show-status))
+          (inhibit-interaction t))
       (url-retrieve-synchronously url))))
 
 (defun eclaw-http-read-response (buffer)
@@ -137,12 +142,9 @@ Uses `eclaw--http-post' and `eclaw-http-read-response'.  JSON keys are symbols."
 
 (defun eclaw-post-completion-request (payload)
   "POST PAYLOAD to OpenRouter chat completions; return parsed JSON alist.
-Announces progress in the echo area, then blocks until
-`url-retrieve-synchronously' completes.  Signals on HTTP or API errors via
-`eclaw-get-response'.  Does not mutate conversation state or log."
-  (when eclaw-debug
-    (eclaw-debug-message "eclaw: contacting OpenRouter…")
-    (redisplay t))
+Blocks until `url-retrieve-synchronously' completes.  Orchestration progress
+is shown by the caller via `eclaw-progress-message'.  Signals on HTTP or API
+errors via `eclaw-get-response'.  Does not mutate conversation state or log."
   (eclaw-get-response
    (eclaw--http-post
     "https://openrouter.ai/api/v1/chat/completions"

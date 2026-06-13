@@ -150,11 +150,22 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
 
 (defcustom eclaw-debug nil
   "When non-nil, emit verbose eclaw progress in the echo area.
-Includes HTTP request notices, token usage, project skills index reloads,
-and tool side-effect details.  Tool dispatch lines and cap/limit notices
-are always shown."
+Includes token usage, project skills index reloads, and tool side-effect
+details.  Orchestration progress uses `eclaw-progress-message'; cap/limit
+notices are always shown."
   :type 'boolean
   :group 'eclaw)
+
+(defcustom eclaw-url-show-status nil
+  "When non-nil, show Emacs `url' library progress during eclaw HTTP.
+Normally off; eclaw emits its own progress via `eclaw-progress-message'."
+  :type 'boolean
+  :group 'eclaw)
+
+(defun eclaw-progress-message (format-string &rest args)
+  "Display FORMAT-STRING in the echo area as an eclaw progress notice."
+  (apply #'message format-string args)
+  (redisplay t))
 
 (defun eclaw-debug-message (format-string &rest args)
   "Like `message' when `eclaw-debug' is non-nil; otherwise no-op."
@@ -477,6 +488,7 @@ Each HTTP exchange is logged."
                          (list (eclaw-assistant-message msg))))
             (throw 'eclaw-chat-done msg)))
         (setq completions (1+ completions))
+        (eclaw-progress-message "eclaw: waiting for model (round %d)…" completions)
         (let* ((payload (eclaw-build-chat-payload messages))
                (response (eclaw-post-completion-request payload))
                (usage (alist-get 'usage response)))

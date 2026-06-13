@@ -37,6 +37,7 @@
 (require 'eclaw-skills)
 
 (declare-function eclaw-debug-message "eclaw" (format-string &rest args))
+(declare-function eclaw-progress-message "eclaw" (format-string &rest args))
 (declare-function eclaw--eclaw-buffer-append "eclaw" (text))
 (declare-function eclaw-tool-message "eclaw" (tool-call-id content))
 
@@ -1420,8 +1421,8 @@ via `eclaw--tool-approval-transcript-line' (audit of allow vs deny)."
          (args-summary
           (let ((s (string-trim (or args-str ""))))
             (if (string-equal s "{}") "" s))))
-    (message
-     "eclaw: tool %s%s"
+    (eclaw-progress-message
+     "eclaw: running tool %s%s"
      name
      (if (string-empty-p args-summary)
          ""
@@ -1432,32 +1433,35 @@ via `eclaw--tool-approval-transcript-line' (audit of allow vs deny)."
     (if-let ((info (gethash name eclaw--tool-registry))
              (handler (plist-get info :handler)))
         (let ((gated-p (eclaw--tool-call-would-require-approval-p name)))
-          (cond
-           ((not gated-p)
-            (funcall handler args))
-           ((eclaw--tool-approval-rule-allows-p name args)
-            (eclaw--tool-approval-transcript-line name args-summary t 'saved-rule)
-            (funcall handler args))
-           ((eclaw--tool-approval-session-rule-allows-p name args)
-            (eclaw--tool-approval-transcript-line name args-summary t 'session-rule)
-            (funcall handler args))
-           (noninteractive
-            (let ((allow-p (eq eclaw-tool-approval-noninteractive 'allow)))
-              (eclaw--tool-approval-transcript-line name args-summary allow-p 'batch)
-              (if allow-p
-                  (funcall handler args)
-                eclaw--tool-call-not-approved-msg)))
-           (t
-            (let ((choice (eclaw--user-approves-tool-call-p name args-summary args)))
-              (if (memq choice '(once session session-project session-exact
-                                 remember remember-project remember-exact))
-                  (progn
-                    (eclaw--tool-approval-transcript-line
-                     name args-summary t
-                     (if (eq choice 'once) 'interactive choice))
-                    (funcall handler args))
-                (eclaw--tool-approval-transcript-line name args-summary nil 'interactive)
-                eclaw--tool-call-not-approved-msg)))))
+          (let ((result
+                 (cond
+                  ((not gated-p)
+                   (funcall handler args))
+                  ((eclaw--tool-approval-rule-allows-p name args)
+                   (eclaw--tool-approval-transcript-line name args-summary t 'saved-rule)
+                   (funcall handler args))
+                  ((eclaw--tool-approval-session-rule-allows-p name args)
+                   (eclaw--tool-approval-transcript-line name args-summary t 'session-rule)
+                   (funcall handler args))
+                  (noninteractive
+                   (let ((allow-p (eq eclaw-tool-approval-noninteractive 'allow)))
+                     (eclaw--tool-approval-transcript-line name args-summary allow-p 'batch)
+                     (if allow-p
+                         (funcall handler args)
+                       eclaw--tool-call-not-approved-msg)))
+                  (t
+                   (let ((choice (eclaw--user-approves-tool-call-p name args-summary args)))
+                     (if (memq choice '(once session session-project session-exact
+                                        remember remember-project remember-exact))
+                         (progn
+                           (eclaw--tool-approval-transcript-line
+                            name args-summary t
+                            (if (eq choice 'once) 'interactive choice))
+                           (funcall handler args))
+                       (eclaw--tool-approval-transcript-line name args-summary nil 'interactive)
+                       eclaw--tool-call-not-approved-msg))))))
+            (eclaw-debug-message "eclaw: tool %s done" name)
+            result))
       (format "Unknown tool: %s" name))))
 
 (defun eclaw--tool-result-messages (tool-calls &optional synth-reason)

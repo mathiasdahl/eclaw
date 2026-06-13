@@ -37,6 +37,8 @@
 (require 'eclaw-tools)
 (require 'eclaw-http)
 
+(declare-function eclaw-progress-message "eclaw" (format-string &rest args))
+
 (defgroup eclaw-web-search nil
   "Web search and fetch tools for eclaw."
   :group 'eclaw)
@@ -225,6 +227,8 @@ Get a free key at https://jina.ai/?sui=apikey — required for `web_search'."
      ((not (eclaw-get-jina-api-key))
       "Error: JINA_API_KEY is required for web_search. Get a free key at https://jina.ai/?sui=apikey")
      (t
+      (eclaw-progress-message "eclaw: web_search %s"
+                              (eclaw--truncate-string q 80))
       (condition-case err
           (let* ((num (eclaw--ws-effective-max-results max-results))
                  (response
@@ -291,6 +295,8 @@ Get a free key at https://jina.ai/?sui=apikey — required for `web_search'."
      ((not (eclaw--ws-url-allowed-p target))
       eclaw--ws-url-blocked-msg)
      (t
+      (eclaw-progress-message "eclaw: web_fetch %s"
+                              (eclaw--truncate-string target 120))
       (condition-case err
           (if-let ((content (eclaw--ws-jina-fetch-response target)))
               (eclaw--ws-truncate-fetch-content content)

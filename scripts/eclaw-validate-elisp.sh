@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 Usage:
   eclaw-validate-elisp.sh --parens FILE ...
-  eclaw-validate-elisp.sh --locate FILE
+  eclaw-validate-elisp.sh --locate FILE [SYMBOL]
   eclaw-validate-elisp.sh --scan FILE
   eclaw-validate-elisp.sh --compile
   eclaw-validate-elisp.sh --require
@@ -62,8 +62,18 @@ case "$action" in
   --parens)
     "$VALIDATE" --parens "$@"
     ;;
-  --locate|--scan)
-    [[ $# -eq 1 ]] || { echo "$action requires exactly one FILE" >&2; exit 2; }
+  --locate)
+    if [[ $# -eq 2 ]]; then
+      "$ELISP_EDIT" --locate --file "$1" --name "$2"
+    elif [[ $# -eq 1 ]]; then
+      "$ELISP_EDIT" --scan --file "$1"
+    else
+      echo "--locate requires FILE or FILE SYMBOL" >&2
+      exit 2
+    fi
+    ;;
+  --scan)
+    [[ $# -eq 1 ]] || { echo "--scan requires exactly one FILE" >&2; exit 2; }
     "$ELISP_EDIT" --scan --file "$1"
     ;;
   --compile)
