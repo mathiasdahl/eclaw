@@ -586,7 +586,7 @@
       setBusy(true);
       const status = addMessage(themeCopy("thinking"), "status");
       try {
-        const { ok, data } = await postJson("/api/chat", { message });
+        const { ok, data } = await postJson("api/chat", { message });
         status.remove();
         if (ok && data.reply != null) {
           addMessage(data.reply, "assistant");
@@ -605,7 +605,7 @@
     resetBtn.addEventListener("click", async () => {
       setBusy(true);
       try {
-        const { ok, data } = await postJson("/api/reset", {});
+        const { ok, data } = await postJson("api/reset", {});
         if (ok && data.ok) {
           messagesEl.innerHTML = "";
           addMessage(themeCopy("resetOk"), "status");
