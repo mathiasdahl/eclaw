@@ -137,7 +137,8 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "should persist as reusable agent instructions, use "
    "`skill_write' to add or replace `.eclaw/skills/<skill_dir>/SKILL.md' "
    "(skill_dir uses only letters, digits, hyphen, underscore; max length 64). "
-   "Both tools apply only under the project directory that contains `.eclaw'.")
+   "Both tools apply only under the project directory that contains `.eclaw'."
+   "When asked for a plan/proposal/options first, present it and wait for explicit approval before acting.")
   "Text of the system role message prepended to every completion request.")
 
 (require 'eclaw-skills)
