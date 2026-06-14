@@ -38,6 +38,11 @@
       --terminal-frame: none;
       --cursor-blink: none;
       --reveal-anim: none;
+      --md-code-bg: rgba(0, 0, 0, 0.06);
+      --md-pre-bg: #f3f4f6;
+      --md-pre-border: #e5e7eb;
+      --md-link: #2563eb;
+      --md-blockquote-border: #d1d5db;
     }
 
     [data-theme="matrix-subtle"],
@@ -63,6 +68,11 @@
       --radius-sm: 0;
       --font: "Share Tech Mono", "Courier New", monospace;
       --glow: 0 0 8px rgba(0, 255, 65, 0.6);
+      --md-code-bg: rgba(0, 255, 65, 0.12);
+      --md-pre-bg: rgba(0, 0, 0, 0.55);
+      --md-pre-border: #003b00;
+      --md-link: #00ff41;
+      --md-blockquote-border: #008f11;
     }
 
     [data-theme="matrix-medium"],
@@ -229,6 +239,96 @@
       align-self: flex-start;
       max-width: 95%;
       animation: var(--reveal-anim);
+      white-space: normal;
+    }
+
+    .msg.assistant > :first-child { margin-top: 0; }
+    .msg.assistant > :last-child { margin-bottom: 0; }
+
+    .msg.assistant p { margin: 0.5em 0; }
+
+    .msg.assistant h1,
+    .msg.assistant h2,
+    .msg.assistant h3,
+    .msg.assistant h4 {
+      margin: 0.85em 0 0.35em;
+      line-height: 1.25;
+      font-weight: 600;
+    }
+
+    .msg.assistant h1 { font-size: 1.25rem; }
+    .msg.assistant h2 { font-size: 1.1rem; }
+    .msg.assistant h3 { font-size: 1rem; }
+
+    .msg.assistant ul,
+    .msg.assistant ol {
+      margin: 0.5em 0;
+      padding-left: 1.4em;
+    }
+
+    .msg.assistant li { margin: 0.2em 0; }
+
+    .msg.assistant code {
+      font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+      font-size: 0.9em;
+      background: var(--md-code-bg);
+      padding: 0.1em 0.35em;
+      border-radius: var(--radius-sm);
+    }
+
+    .msg.assistant pre {
+      margin: 0.65em 0;
+      padding: 0.65rem 0.75rem;
+      overflow-x: auto;
+      background: var(--md-pre-bg);
+      border: 1px solid var(--md-pre-border);
+      border-radius: var(--radius-sm);
+      line-height: 1.4;
+    }
+
+    .msg.assistant pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      font-size: 0.85em;
+    }
+
+    .msg.assistant blockquote {
+      margin: 0.65em 0;
+      padding-left: 0.75rem;
+      border-left: 3px solid var(--md-blockquote-border);
+      color: var(--text-dim);
+    }
+
+    .msg.assistant a {
+      color: var(--md-link);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .msg.assistant hr {
+      margin: 0.85em 0;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    .msg.assistant table {
+      margin: 0.65em 0;
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 0.92em;
+    }
+
+    .msg.assistant th,
+    .msg.assistant td {
+      border: 1px solid var(--border);
+      padding: 0.35rem 0.5rem;
+      text-align: left;
+    }
+
+    .msg.assistant th {
+      background: var(--md-code-bg);
+      font-weight: 600;
     }
 
     .msg.error {
@@ -406,6 +506,8 @@
       <button type="submit" class="primary" id="send">Send</button>
     </form>
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
   <script>
     const messagesEl = document.getElementById("messages");
     const form = document.getElementById("form");
@@ -552,10 +654,39 @@
       applyTheme(themeSelect.value);
     });
 
+    if (typeof marked !== "undefined") {
+      marked.setOptions({ gfm: true, breaks: false });
+    }
+
+    if (typeof DOMPurify !== "undefined") {
+      DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+        if (node.tagName === "A") {
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
+      });
+    }
+
+    function renderAssistantHtml(text) {
+      if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+        return null;
+      }
+      return DOMPurify.sanitize(marked.parse(text));
+    }
+
     function addMessage(text, className) {
       const div = document.createElement("div");
       div.className = "msg " + className;
-      div.textContent = text;
+      if (className === "assistant") {
+        const html = renderAssistantHtml(text);
+        if (html != null) {
+          div.innerHTML = html;
+        } else {
+          div.textContent = text;
+        }
+      } else {
+        div.textContent = text;
+      }
       messagesEl.appendChild(div);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return div;
