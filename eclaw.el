@@ -250,7 +250,7 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
 (defun eclaw--emacs-started-at ()
   "Return Emacs process start time as a `current-time' list."
-  (time-subtract (current-time) (seconds-to-time (emacs-uptime))))
+  before-init-time)
 
 (defun eclaw-usage-stats ()
   "Return token usage alists suitable for JSON encoding."
