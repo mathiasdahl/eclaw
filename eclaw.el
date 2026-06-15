@@ -221,6 +221,45 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 (defvar eclaw--session-project nil
   "`default-directory' at session start, stored as an absolute path.")
 
+(defun eclaw--usage-zero ()
+  "Return a fresh usage alist with zero prompt and completion tokens."
+  '((prompt_tokens . 0) (completion_tokens . 0)))
+
+(defvar eclaw--usage-turn (eclaw--usage-zero)
+  "Token usage for the current `eclaw-chat' turn (all HTTP rounds).")
+
+(defvar eclaw--usage-conversation (eclaw--usage-zero)
+  "Cumulative token usage for the active conversation since last reset.")
+
+(defvar eclaw--usage-emacs (eclaw--usage-zero)
+  "Cumulative token usage since Emacs started.")
+
+(defun eclaw--usage-add (accum usage)
+  "Add prompt/completion counts from USAGE alist into ACCUM alist."
+  (let ((prompt (+ (or (alist-get 'prompt_tokens accum) 0)
+                   (or (alist-get 'prompt_tokens usage) 0)))
+        (completion (+ (or (alist-get 'completion_tokens accum) 0)
+                       (or (alist-get 'completion_tokens usage) 0))))
+    `((prompt_tokens . ,prompt) (completion_tokens . ,completion))))
+
+(defun eclaw--usage-accumulate (usage)
+  "Add USAGE from one HTTP response to turn, conversation, and Emacs totals."
+  (setq eclaw--usage-turn (eclaw--usage-add eclaw--usage-turn usage)
+        eclaw--usage-conversation (eclaw--usage-add eclaw--usage-conversation usage)
+        eclaw--usage-emacs (eclaw--usage-add eclaw--usage-emacs usage)))
+
+(defun eclaw--emacs-started-at ()
+  "Return Emacs process start time as a `current-time' list."
+  (time-subtract (current-time) (seconds-to-time (emacs-uptime))))
+
+(defun eclaw-usage-stats ()
+  "Return token usage alists suitable for JSON encoding."
+  `((turn . ,eclaw--usage-turn)
+    (conversation . ,eclaw--usage-conversation)
+    (emacs . ,eclaw--usage-emacs)
+    (emacs_started_at . ,(format-time-string "%Y-%m-%d %H:%M"
+                                             (eclaw--emacs-started-at)))))
+
 (defun eclaw--ensure-session-started ()
   "Set `eclaw--session-started' and `eclaw--session-project' on first chat turn."
   (unless eclaw--session-started
@@ -370,6 +409,7 @@ When archiving fails, the session is left unchanged."
   (setq eclaw-conversation nil)
   (setq eclaw--session-started nil)
   (setq eclaw--session-project nil)
+  (setq eclaw--usage-conversation (eclaw--usage-zero))
   (when eclaw-archive-clear-buffer-on-reset
     (eclaw--clear-eclaw-buffer))
   (message "eclaw conversation reset"))
@@ -473,6 +513,7 @@ The user turn is appended to `eclaw-conversation' before the first
 request so history matches what was sent even when a request fails.
 Each HTTP exchange is logged."
   (eclaw--ensure-session-started)
+  (setq eclaw--usage-turn (eclaw--usage-zero))
   (setq eclaw-conversation
         (nconc eclaw-conversation (list (eclaw-user-message prompt))))
   (let ((messages (eclaw-build-messages))
@@ -495,7 +536,9 @@ Each HTTP exchange is logged."
                (response (eclaw-post-completion-request payload))
                (usage (alist-get 'usage response)))
           (eclaw-log payload response)
-          (when usage (eclaw-report-usage usage))
+          (when usage
+            (eclaw-report-usage usage)
+            (eclaw--usage-accumulate usage))
           (when-let ((tok (and usage (alist-get 'total_tokens usage))))
             (setq total-tokens (+ total-tokens tok)))
           (let* ((tool-calls (eclaw-get-tool-calls response))

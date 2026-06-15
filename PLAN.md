@@ -425,7 +425,9 @@ Optional browser front-end in **`eclaw-web.el`** + **`web/chat.html`**, using
 emacs-web-server on `127.0.0.1` (default port 9876):
 
 - `GET /` — chat page; `POST /api/chat` — JSON in/out, calls `eclaw-chat`
+- `GET /api/stats` — token usage JSON (last turn, conversation, Emacs lifetime + start time)
 - `POST /api/reset` — `eclaw-reset-conversation`
+- Token stats bar in the browser: input/output counts for last turn, current chat (since reset), and cumulative since Emacs start; `/api/chat` and `/api/reset` also return `usage` in the JSON body
 - `M-x eclaw-web-start` / `eclaw-web-stop` / `eclaw-web-open`
 - Shares global `eclaw-conversation` with `*eclaw*`; tool approval `off` in web handler
 - Not auto-loaded: `(require 'eclaw-web)` after emacs-web-server is on `load-path`

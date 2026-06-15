@@ -458,6 +458,24 @@
       color: var(--text-dim);
     }
 
+    #usage-stats {
+      margin: 0.35rem 0 0.65rem;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #usage-stats .usage-line + .usage-line {
+      margin-top: 0.15rem;
+    }
+
+    [data-theme="matrix-subtle"] #usage-stats,
+    [data-theme="matrix-medium"] #usage-stats,
+    [data-theme="matrix-full"] #usage-stats {
+      font-family: var(--font);
+    }
+
     #theme-select {
       font: inherit;
       padding: 0.45rem 0.65rem;
@@ -501,6 +519,7 @@
       </select>
     </div>
     <div id="messages" aria-live="polite"></div>
+    <div id="usage-stats" aria-live="polite" aria-label="Token usage"></div>
     <form id="form">
       <textarea id="prompt" rows="2" placeholder="Message…" aria-label="Message"></textarea>
       <button type="submit" class="primary" id="send">Send</button>
@@ -515,6 +534,7 @@
     const sendBtn = document.getElementById("send");
     const resetBtn = document.getElementById("reset");
     const themeSelect = document.getElementById("theme-select");
+    const usageStatsEl = document.getElementById("usage-stats");
     const rainCanvas = document.getElementById("matrix-rain");
     const THEME_KEY = "eclaw-theme";
 
@@ -550,6 +570,43 @@
       const theme = document.documentElement.dataset.theme || "default";
       const bucket = isMatrixTheme(theme) ? COPY.matrix : COPY.default;
       return bucket[key];
+    }
+
+    function formatTokens(n) {
+      const value = Number(n);
+      if (!Number.isFinite(value)) return "0";
+      return value.toLocaleString();
+    }
+
+    function usageLine(label, usage) {
+      const prompt = usage && usage.prompt_tokens != null ? usage.prompt_tokens : 0;
+      const completion = usage && usage.completion_tokens != null ? usage.completion_tokens : 0;
+      return `${label}: ${formatTokens(prompt)} in · ${formatTokens(completion)} out`;
+    }
+
+    function renderUsageStats(data) {
+      if (!usageStatsEl || !data) return;
+      const lines = [];
+      if (data.turn) lines.push(usageLine("Last turn", data.turn));
+      if (data.conversation) lines.push(usageLine("Chat", data.conversation));
+      if (data.emacs) {
+        const started = data.emacs_started_at ? ` (${data.emacs_started_at})` : "";
+        lines.push(usageLine(`Since Emacs start${started}`, data.emacs));
+      }
+      usageStatsEl.innerHTML = lines
+        .map((text) => `<div class="usage-line">${text}</div>`)
+        .join("");
+    }
+
+    async function fetchStats() {
+      try {
+        const res = await fetch("api/stats");
+        if (!res.ok) return;
+        const data = await res.json();
+        renderUsageStats(data);
+      } catch (_err) {
+        /* non-fatal */
+      }
     }
 
     function applyThemeCopy() {
@@ -721,6 +778,7 @@
         status.remove();
         if (ok && data.reply != null) {
           addMessage(data.reply, "assistant");
+          if (data.usage) renderUsageStats(data.usage);
         } else {
           addMessage(data.error || "Request failed", "error");
         }
@@ -740,6 +798,7 @@
         if (ok && data.ok) {
           messagesEl.innerHTML = "";
           addMessage(themeCopy("resetOk"), "status");
+          if (data.usage) renderUsageStats(data.usage);
         } else {
           addMessage(data.error || "Reset failed", "error");
         }
@@ -756,6 +815,8 @@
         form.requestSubmit();
       }
     });
+
+    fetchStats();
   </script>
 </body>
 </html>

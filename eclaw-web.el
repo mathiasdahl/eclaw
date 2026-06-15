@@ -87,6 +87,7 @@ from a scratch buffer with a surprising `default-directory')."
 (declare-function eclaw--eclaw-buffer-setup "eclaw" ())
 (declare-function eclaw-chat "eclaw" (prompt))
 (declare-function eclaw-reset-conversation "eclaw" ())
+(declare-function eclaw-usage-stats "eclaw" ())
 
 (defun eclaw-web--data-dir ()
   "Return the directory holding static web assets (`web/' under the eclaw repo)."
@@ -183,7 +184,9 @@ from a scratch buffer with a surprising `default-directory')."
                         (lambda () (eclaw-chat message)))))
                   (eclaw-web--append-transcript message reply)
                   (eclaw-web--json-response
-                   process 200 `((reply . ,reply) (error . nil)))))
+                   process 200 `((reply . ,reply)
+                                 (error . nil)
+                                 (usage . ,(eclaw-usage-stats))))))
               (eclaw-web--json-response
                process 400
                '((reply . nil)
@@ -193,10 +196,15 @@ from a scratch buffer with a surprising `default-directory')."
         process 500
         `((reply . nil) (error . ,(error-message-string err))))))))
 
+(defun eclaw-web--handle-get-stats (request)
+  (with-slots (process) request
+    (eclaw-web--json-response process 200 (eclaw-usage-stats))))
+
 (defun eclaw-web--handle-post-reset (request)
   (with-slots (process) request
     (eclaw-web--with-web-context #'eclaw-reset-conversation)
-    (eclaw-web--json-response process 200 '((ok . true)))))
+    (eclaw-web--json-response process 200 `((ok . true)
+                                            (usage . ,(eclaw-usage-stats))))))
 
 (defun eclaw-web--handle-request (request)
   "Route REQUEST to the appropriate handler."
@@ -205,6 +213,8 @@ from a scratch buffer with a surprising `default-directory')."
     (cond
      ((and get-path (string= get-path "/"))
       (eclaw-web--handle-get-index request))
+     ((and get-path (string= get-path "/api/stats"))
+      (eclaw-web--handle-get-stats request))
      ((and post-path (string= post-path "/api/chat"))
       (eclaw-web--handle-post-chat request))
      ((and post-path (string= post-path "/api/reset"))
