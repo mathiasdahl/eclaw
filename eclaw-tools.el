@@ -36,6 +36,7 @@
 (require 'seq)
 (require 'eclaw-skills)
 
+(declare-function eclaw-message "eclaw" (format-string &rest args))
 (declare-function eclaw-debug-message "eclaw" (format-string &rest args))
 (declare-function eclaw-progress-message "eclaw" (format-string &rest args))
 (declare-function eclaw--eclaw-buffer-append "eclaw" (text))
@@ -465,11 +466,11 @@ Same key shapes as `eclaw--tool-approval-rules'; cleared when Emacs exits.")
                                               rules))
                             rules
                           (progn
-                            (message "eclaw: ignoring invalid tool approval rules in %s"
+                            (eclaw-message "eclaw: ignoring invalid tool approval rules in %s"
                                      path)
                             nil))))
                   (error
-                   (message "eclaw: could not read tool approval rules from %s"
+                   (eclaw-message "eclaw: could not read tool approval rules from %s"
                             path)
                    nil))
               nil)))))
@@ -622,7 +623,7 @@ Return `once', `session', `session-project', `session-exact', `remember',
   (interactive)
   (eclaw--tool-approval-rules-load)
   (if (null eclaw--tool-approval-rules)
-      (message "eclaw: no tool approval rules to remove")
+      (eclaw-message "eclaw: no tool approval rules to remove")
     (let* ((candidates
             (mapcar (lambda (rule)
                       (cons (eclaw--tool-approval-rule-key-description (car rule))
@@ -637,7 +638,7 @@ Return `once', `session', `session-project', `session-exact', `remember',
                             (eclaw--tool-approval-rule-key-equal-p (car rule) key))
                           eclaw--tool-approval-rules))
       (eclaw--tool-approval-rules-save)
-      (message "eclaw: removed tool approval rule: %s"
+      (eclaw-message "eclaw: removed tool approval rule: %s"
                (eclaw--tool-approval-rule-key-description key))))))
 
 ;;;###autoload
@@ -650,7 +651,7 @@ Return `once', `session', `session-project', `session-exact', `remember',
     (progn
       (setq eclaw--tool-approval-rules nil)
       (eclaw--tool-approval-rules-save)
-      (message "eclaw: cleared all tool approval rules"))))
+      (eclaw-message "eclaw: cleared all tool approval rules"))))
 
 (defun eclaw--tool-approval-transcript-line (tool-name args-summary allowed-p context)
   "Append one approval/denial audit line when buffer `*eclaw*' exists.

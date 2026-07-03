@@ -83,6 +83,7 @@ from a scratch buffer with a surprising `default-directory')."
 (defvar eclaw-web--data-dir nil
   "Cached eclaw install directory; set from `load-file-name' when this file loads.")
 
+(declare-function eclaw-message "eclaw" (format-string &rest args))
 (declare-function eclaw--eclaw-buffer-append "eclaw" (text))
 (declare-function eclaw--eclaw-buffer-setup "eclaw" ())
 (declare-function eclaw-chat "eclaw" (prompt))
@@ -231,7 +232,7 @@ from a scratch buffer with a surprising `default-directory')."
   (setq eclaw-web-server
         (ws-start #'eclaw-web--handle-request eclaw-web-port nil
                   :host eclaw-web-host))
-  (message "eclaw web: %s (assets from %s)" (eclaw-web--url) (eclaw-web--data-dir)))
+  (eclaw-message "eclaw web: %s (assets from %s)" (eclaw-web--url) (eclaw-web--data-dir)))
 
 ;;;###autoload
 (defun eclaw-web-stop ()
@@ -240,7 +241,7 @@ from a scratch buffer with a surprising `default-directory')."
   (when eclaw-web-server
     (ws-stop eclaw-web-server)
     (setq eclaw-web-server nil)
-    (message "eclaw web server stopped")))
+    (eclaw-message "eclaw web server stopped")))
 
 ;;;###autoload
 (defun eclaw-web-open ()

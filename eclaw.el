@@ -163,22 +163,32 @@ Normally off; eclaw emits its own progress via `eclaw-progress-message'."
   :type 'boolean
   :group 'eclaw)
 
+(defun eclaw--iso-timestamp (&optional time)
+  "Return ISO 8601 timestamp for TIME (defaults to now)."
+  (format-time-string "%Y-%m-%dT%H:%M:%S%z" (or time (current-time))))
+
+(defun eclaw-message (format-string &rest args)
+  "Display a timestamped eclaw notice in the echo area / *Messages*."
+  (message "[%s] %s"
+           (eclaw--iso-timestamp)
+           (apply #'format format-string args)))
+
 (defun eclaw-progress-message (format-string &rest args)
   "Display FORMAT-STRING in the echo area as an eclaw progress notice."
-  (apply #'message format-string args)
+  (apply #'eclaw-message format-string args)
   (redisplay t))
 
 (defun eclaw-debug-message (format-string &rest args)
-  "Like `message' when `eclaw-debug' is non-nil; otherwise no-op."
+  "Like `eclaw-message' when `eclaw-debug' is non-nil; otherwise no-op."
   (when eclaw-debug
-    (apply #'message format-string args)))
+    (apply #'eclaw-message format-string args)))
 
 ;;;###autoload
 (defun eclaw-toggle-debug ()
   "Toggle `eclaw-debug' and report the new state in the echo area."
   (interactive)
   (setq eclaw-debug (not eclaw-debug))
-  (message "eclaw debug %s" (if eclaw-debug "on" "off")))
+  (eclaw-message "eclaw debug %s" (if eclaw-debug "on" "off")))
 
 (defcustom eclaw-data-dir
   (expand-file-name "~/.eclaw/")
@@ -403,7 +413,7 @@ When archiving fails, the session is left unchanged."
         (let ((path (eclaw-archive-current-conversation)))
           (unless path
             (user-error "Archive produced no file"))
-          (message "eclaw: conversation archived to %s" path))
+          (eclaw-message "eclaw: conversation archived to %s" path))
       (error
        (user-error "Archive failed: %s" (error-message-string err)))))
   (setq eclaw-conversation nil)
@@ -412,7 +422,7 @@ When archiving fails, the session is left unchanged."
   (setq eclaw--usage-conversation (eclaw--usage-zero))
   (when eclaw-archive-clear-buffer-on-reset
     (eclaw--clear-eclaw-buffer))
-  (message "eclaw conversation reset"))
+  (eclaw-message "eclaw conversation reset"))
 
 (defun eclaw-system-message ()
   "Return one system message alist using `eclaw-system-prompt'.
@@ -525,7 +535,7 @@ Each HTTP exchange is logged."
           (let ((msg (concat "[eclaw: stopped — max completions per prompt ("
                              (number-to-string eclaw-max-completions-per-prompt)
                              ") reached]")))
-            (message "eclaw: %s" msg)
+            (eclaw-message "eclaw: %s" msg)
             (setq eclaw-conversation
                   (nconc eclaw-conversation
                          (list (eclaw-assistant-message msg))))
@@ -563,7 +573,7 @@ Each HTTP exchange is logged."
                   (when over-tokens
                     (let ((note (concat "[eclaw: turn stopped — "
                                         synth-reason "]")))
-                      (message "eclaw: %s" note)
+                      (eclaw-message "eclaw: %s" note)
                       (setq eclaw-conversation
                             (nconc eclaw-conversation
                                    (list (eclaw-assistant-message note))))
@@ -574,7 +584,7 @@ Each HTTP exchange is logged."
                   (setq content
                         (concat content
                                 "\n\n[eclaw: cumulative token limit for this prompt exceeded]"))
-                  (message "eclaw: token limit exceeded for this prompt"))
+                  (eclaw-message "eclaw: token limit exceeded for this prompt"))
                 (eclaw-append-assistant-reply content)
                 (throw 'eclaw-chat-done content)))))))))
 
@@ -591,7 +601,7 @@ Each HTTP exchange is logged."
 (defun eclaw-log (request-payload response)
   "Record REQUEST-PAYLOAD and RESPONSE via `eclaw-append-json-log' (one line)."
   (eclaw-append-json-log
-   `((timestamp . ,(format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+   `((timestamp . ,(eclaw--iso-timestamp))
      (model . ,eclaw-model)
      (request . ,request-payload)
      (response . ,response))))
@@ -658,7 +668,7 @@ PROMPT is read interactively when called as a command."
       (condition-case err
           (let ((path (eclaw-archive-current-conversation)))
             (if path
-                (message "eclaw: conversation saved to %s" path)
+                (eclaw-message "eclaw: conversation saved to %s" path)
               (user-error "Archive produced no file")))
         (error
          (user-error "Archive failed: %s" (error-message-string err))))
