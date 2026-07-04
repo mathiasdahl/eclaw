@@ -44,15 +44,15 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - **Canonical execution trace:** `eclaw-conversation` holds user, assistant (with optional `tool_calls`), and tool messages—no system row
 - **Per-turn flow:** append user message → `eclaw-build-messages` → loop completions until plain assistant reply or a cap fires
 - **Message builders:** `eclaw-system-message`, `eclaw-user-message`, `eclaw-assistant-message`, `eclaw-tool-message`
-- **System prompt:** `eclaw-system-prompt` plus optional project skills index block plus **session context block** (session-start date/time frozen for the chat session; see [`docs/session-context.md`](docs/session-context.md))
-- **Session start:** `eclaw--ensure-session-started` in `eclaw-chat` sets `eclaw--session-started` and `eclaw--session-project` on first turn; cleared by `eclaw-reset-conversation`
+- **System prompt:** `eclaw-system-prompt` plus optional agent skills index block plus **session context block** (session-start date/time frozen for the chat session; see [`docs/session-context.md`](docs/session-context.md))
+- **Session start:** `eclaw--ensure-session-started` in `eclaw-chat` sets `eclaw--session-started` on first turn; cleared by `eclaw-reset-conversation`
 - **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`, `eclaw-save-conversation`, `eclaw-list-conversations`, `eclaw-open-conversation`
 
 ## Tool calling (OpenAI/OpenRouter shape)
 
 - Registry: `eclaw-deftool` macro → `eclaw--tool-registry` in **`eclaw-tools.el`** (hash table; not `cl-defstruct`); plist includes `:risk` (`:read` default, `:write` for disk writes)
 - Optional leading options in `eclaw-deftool`, e.g. `(:risk :write)`, before tool body
-- **Tool approval** (complete): **`eclaw-tool-approval-mode`** (`off` / `writes` / `all`; default **`all`**), interactive/batch gate, transcript lines in **`*eclaw*`**, persisted rules in **`eclaw-data-dir/tool-approval-rules.el`** (global, project-scoped, and args-scoped keys; **`remember`** / **`remember-project`** / **`remember-exact`**); maintenance: **`eclaw-list-tool-approval-rules`**, **`eclaw-remove-tool-approval-rule`**, **`eclaw-clear-tool-approval-rules`** — see [`docs/tool-approval.md`](docs/tool-approval.md)
+- **Tool approval** (complete): **`eclaw-tool-approval-mode`** (`off` / `writes` / `all`; default **`all`**), interactive/batch gate, transcript lines in **`*eclaw*`**, persisted rules in **`<eclaw-folder>/tool-approval-rules.el`** (global and args-scoped keys; **`remember`** / **`remember-exact`**); maintenance: **`eclaw-list-tool-approval-rules`**, **`eclaw-remove-tool-approval-rule`**, **`eclaw-clear-tool-approval-rules`** — see [`docs/tool-approval.md`](docs/tool-approval.md)
 - Optional parameters via `:optional` in `eclaw-deftool`
 - Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages` (**`eclaw-tools.el`**)
 - Multi-tool per turn; multi-round loop in `eclaw-chat`
@@ -70,8 +70,8 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 | `web_search` | Live web search (Jina by default; provider registry) | `:read` |
 | `web_fetch` | Fetch URL content as text (SSRF guard; Jina Reader by default) | `:read` |
 | `send_email` | Send email to configured work or home address only (`mailme-mail` backend) | `:write` |
-| `notes_write_text` | `.txt` only under `<project>/notes/` | `:write` |
-| `skill_write` | `.eclaw/skills/<dir>/SKILL.md` only | `:write` |
+| `notes_write_text` | `.txt` only under `<eclaw-folder>/notes/` | `:write` |
+| `skill_write` | `<eclaw-folder>/skills/<dir>/SKILL.md` only | `:write` |
 
 ## Search tools (Milestone 1c)
 
@@ -104,10 +104,10 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - Output prefixes each line with its line number (`123|content`); `[eclaw: line limit N reached]` when truncated
 - **Config:** `eclaw-read-default-line-limit` (250), `eclaw-read-max-line-limit` (1000) in **`eclaw-tools.el`**
 
-## Project agent skills (Milestone 1b — done)
+## Agent skills (Milestone 1b — done)
 
-- Project root: directory containing `.eclaw` (`eclaw--skills-project-root`)
-- Discover: `.eclaw/skills/<name>/SKILL.md` only (**`eclaw-skills.el`**)
+- Root: `eclaw-folder` (`eclaw--folder`); default `~/.eclaw/`
+- Discover: `skills/<name>/SKILL.md` only (**`eclaw-skills.el`**)
 - YAML frontmatter: `name`, `description`; fallback from body
 - System message: **index only** (name, description, path); bodies loaded via `read_file`
 - Cache: `eclaw--skills-cache`; one directory scan builds mtime signature and skill list; invalidated on signature change or `skill_write`
@@ -121,9 +121,10 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 
 ## Logging and UI
 
-- JSONL: `eclaw-log` → `eclaw-agent-log-file` (default `~/.emacs.d/eclaw-log.jsonl`)
+- **Data root:** `eclaw-folder` (default `~/.eclaw/`); all paths below are relative to it
+- JSONL log: `eclaw-log.jsonl` (`eclaw--agent-log-file`)
 - One line per HTTP exchange: timestamp, model, request, response
-- **Conversation archives:** Markdown files under `eclaw-conversation-archive-dir` (default `~/.emacs.d/eclaw/conversations/`); written on `eclaw-reset-conversation` (when non-empty) or `eclaw-save-conversation`; YAML frontmatter + `*eclaw*` transcript + optional collapsible tool appendix (`eclaw-archive-include-tools`); browse via `eclaw-list-conversations` (Dired) or `eclaw-open-conversation`
+- **Conversation archives:** Markdown files under `conversations/`; written on `eclaw-reset-conversation` (when non-empty) or `eclaw-save-conversation`; YAML frontmatter (`folder:` records `eclaw-folder`) + `*eclaw*` transcript + optional collapsible tool appendix (`eclaw-archive-include-tools`); browse via `eclaw-list-conversations` (Dired) or `eclaw-open-conversation`
 - UI: append-only buffer `*eclaw*`; token usage in echo area when `eclaw-debug` is non-nil
 - Echo area: short tool-dispatch lines always; HTTP progress, token counts, and index reloads only when `eclaw-debug` is non-nil (`M-x eclaw-toggle-debug`, or `M-x customize-variable RET eclaw-debug RET`)
 
@@ -213,9 +214,9 @@ Tool result:
 - `notes_write_text`, `skill_write` with path sandboxing
 - Tool result messages; multi-tool and multi-round loop with caps
 
-## Milestone 1b — Project agent skills ✓
+## Milestone 1b — Agent skills ✓
 
-- `.eclaw/skills/*/SKILL.md` discovery and index in system prompt
+- `skills/*/SKILL.md` under `eclaw-folder` — discovery and index in system prompt
 - YAML frontmatter; mtime-based cache invalidation
 - No global/user-wide skill paths (extension point for later)
 
@@ -241,7 +242,7 @@ Human-in-the-loop before local tools run, with persisted rules. Documented in [`
 - **B** — Interactive gate in `eclaw--dispatch-one-tool-call`; batch via `eclaw-tool-approval-noninteractive`
 - **C** — `eclaw--tool-approval-transcript-line` in `*eclaw*`
 - **D** — `tool-approval-rules.el`; global **`remember`**
-- **E** — Project- and args-scoped rule keys; **`remember-project`** / **`remember-exact`**; `eclaw-list-tool-approval-rules`, `eclaw-remove-tool-approval-rule`, `eclaw-clear-tool-approval-rules`
+- **E** — Args-scoped rule keys; **`remember-exact`**; `eclaw-list-tool-approval-rules`, `eclaw-remove-tool-approval-rule`, `eclaw-clear-tool-approval-rules`
 - **F** — Multi-tool and cap behavior documented (one tool message per `tool_call_id`; synthetic results on token cap)
 
 ## Transport layer refactor ✓ (+ physical **`eclaw-http.el`** split, May 2026)
@@ -289,7 +290,7 @@ Multibyte text in HTTP request: POST /api/v1/chat/completions HTTP/1.1
 ## Multi-file layout ✓
 
 - **`eclaw.el`** — orchestration spine (~650 lines): configuration, conversation, request assembly, chat loop, logging, UI
-- **`eclaw-skills.el`** — project skills index (~200 lines)
+- **`eclaw-skills.el`** — agent skills index (~200 lines)
 - **`eclaw-tools.el`** — tool registry, handlers, dispatch, path policy (~1,080 lines)
 - **`eclaw-http.el`** — HTTP transport (~200 lines)
 - **`eclaw-web-search.el`** — web search/fetch tools (~250 lines)
@@ -308,7 +309,7 @@ Transport layer is extracted: `eclaw-chat` calls `eclaw-build-chat-payload` + `e
 (defvar-local eclaw-conversation nil)
 ```
 
-Or bind conversation to project root. Goals: multiple simultaneous sessions, per-project traces.
+Or bind conversation per buffer or per `eclaw-folder`. Goals: multiple simultaneous sessions, separate traces.
 
 ### 2. Major mode — Milestone 3
 
@@ -341,7 +342,7 @@ Split complete (May 2026). **`eclaw.el`** is **~650 lines**; siblings **`eclaw-t
 ```text
 eclaw.el            ; Commentary, Configuration, Conversation, request assembly,
                     ; orchestration, logging UI, interactive entrypoints, `provide'
-eclaw-skills.el     ; Project skills cache, discovery, system block (~200 lines; split slice 2 ✓)
+eclaw-skills.el     ; Agent skills cache, discovery, system block (~200 lines; split slice 2 ✓)
 eclaw-tools.el      ; `eclaw-deftool', registry, handlers, dispatch (~1,080 lines; split slice 3 ✓)
 eclaw-http.el       ; HTTP transport (split slice 1 ✓; ~200 lines)
 eclaw-web-search.el ; web search/fetch tools (Jina default; ~250 lines)
@@ -375,7 +376,7 @@ Each slice moves code only (plus `provide`/`require`s and PLAN commentary); beha
 
 ### Split slice 2 — `eclaw-skills.el` ✅ **done**
 
-**Moved:** everything under former `;;; Project skills` (`eclaw--skills-cache` through **`eclaw--skills-system-block`**) into **`eclaw-skills.el`** (`provide` **`eclaw-skills`**). **`eclaw--invalidate-skills-cache`** moved with **`skill_write`** to **`eclaw-tools.el`** (clears **`eclaw--skills-cache`**).
+**Moved:** everything under former `;;; Agent skills` (`eclaw--skills-cache` through **`eclaw--skills-system-block`**) into **`eclaw-skills.el`** (`provide` **`eclaw-skills`**). **`eclaw--invalidate-skills-cache`** moved with **`skill_write`** to **`eclaw-tools.el`** (clears **`eclaw--skills-cache`**).
 
 **`eclaw.el`:** **`(require 'eclaw-skills)`** before **`;;; Conversation`** / **`eclaw-system-message`**.
 
@@ -469,6 +470,6 @@ The system **is** an LLM orchestration runtime for a personal assistant, not a t
 
 - `eclaw-conversation` is an **execution trace** (user, assistant, tool events)
 - Tool calls are **execution events** logged per HTTP round
-- Project skills are **indexed capabilities** loaded on demand via `read_file`
+- Agent skills are **indexed capabilities** loaded on demand via `read_file`
 
 Further evolution: isolated sessions, richer UI, and eventually a cloud-hosted runtime—without losing inspectability. Async transport and streaming are optional, not current priorities.

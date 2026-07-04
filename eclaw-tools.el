@@ -42,7 +42,9 @@
 (declare-function eclaw--eclaw-buffer-append "eclaw" (text))
 (declare-function eclaw-tool-message "eclaw" (tool-call-id content))
 
-(defvar eclaw-data-dir)
+(declare-function eclaw--folder "eclaw" ())
+
+(defvar eclaw-folder)
 
 ;;; Tools (registry and `eclaw-deftool')
 
@@ -194,10 +196,6 @@ directory with or without a trailing slash."
             (and (> (length canon-path) (length pre))
                  (string-prefix-p pre canon-path)))))))
 
-(defun eclaw--project-root-for-eclaw-writes ()
-  "Return project directory containing `.eclaw', or nil."
-  (eclaw--skills-project-root))
-
 (defun eclaw--skill-dir-name-allowed-p (name)
   "Non-nil when NAME is a single safe skill directory segment."
   (and name
@@ -219,18 +217,16 @@ directory with or without a trailing slash."
         (if dir (concat dir prefixed) prefixed)))))
 
 (defun eclaw-tool-notes-write-text (relative-path content append-p)
-  "Write CONTENT to RELATIVE-PATH under `<root>/notes/'.
+  "Write CONTENT to RELATIVE-PATH under `eclaw-folder'/`notes/'.
 Create parent directories when missing.  With non-nil APPEND-P, append to an
 existing regular file.  Path must end with `.txt' (any case) and resolve under
 `notes/'.  A `YYYY-MM-DD_HHMMSS-' prefix is added to the basename when absent.
 Return a status string."
-  (let* ((root (eclaw--project-root-for-eclaw-writes))
+  (let* ((root (eclaw--folder))
          (rel (eclaw--notes-relative-path-with-timestamp
                (string-trim (or relative-path ""))))
          (text (or content "")))
     (cond
-     ((null root)
-      "Error: notes_write_text requires a `.eclaw' project root from `default-directory'.")
      ((string-empty-p rel)
       "Error: notes_write_text requires non-empty relative_path under notes/.")
      ((not (string-match-p "\\.[tT][xX][tT]\\'" rel))
@@ -245,9 +241,9 @@ Return a status string."
          ((or (null root-real) (null notes-dir) (null target))
           "Error: could not resolve notes path.")
          ((not (eclaw--canonical-under-directory-p notes-dir root-real))
-          "Error: `notes' resolves outside the project root.")
+          "Error: `notes' resolves outside `eclaw-folder'.")
          ((not (eclaw--canonical-under-directory-p target notes-dir))
-          "Error: target path escapes the project `notes/` directory.")
+          "Error: target path escapes the `notes/' directory.")
          ((and (file-exists-p target) (not (file-regular-p target)))
           "Error: notes target exists but is not a regular file.")
          (t
@@ -268,34 +264,27 @@ Return a status string."
             (error (format "Error writing notes file %S: %S" target err))))))))))
 
 (defun eclaw-tool-skill-write (skill-dir content)
-  "Create or replace `.eclaw/skills/<skill-dir>/SKILL.md' with CONTENT (UTF-8).
+  "Create or replace `skills/<skill-dir>/SKILL.md' under `eclaw-folder' with CONTENT (UTF-8).
 Return a status string."
-  (let* ((root (eclaw--project-root-for-eclaw-writes))
+  (let* ((root (eclaw--folder))
          (text (or content "")))
     (cond
-     ((null root)
-      "Error: skill_write requires a `.eclaw' project root from `default-directory'.")
      ((not (eclaw--skill-dir-name-allowed-p skill-dir))
       "Error: skill_write skill_dir must be 1–64 chars [A-Za-z0-9_-] only.")
      (t
       (let* ((root-real (eclaw--canonical-path root))
-             (dot-eclaw (eclaw--canonical-path (expand-file-name ".eclaw" root)))
-             (skills-dir (eclaw--canonical-path
-                          (expand-file-name "skills" (expand-file-name ".eclaw" root))))
+             (skills-dir (eclaw--canonical-path (expand-file-name "skills" root)))
              (skill-subdir (eclaw--canonical-path
                             (expand-file-name skill-dir skills-dir)))
              (target (eclaw--canonical-path
                       (expand-file-name "SKILL.md" skill-subdir))))
         (cond
-         ((or (null root-real) (null dot-eclaw) (null skills-dir)
-              (null skill-subdir) (null target))
+         ((or (null root-real) (null skills-dir) (null skill-subdir) (null target))
           "Error: could not resolve skill path.")
-         ((not (eclaw--canonical-under-directory-p dot-eclaw root-real))
-          "Error: `.eclaw' resolves outside the project root.")
-         ((not (eclaw--canonical-under-directory-p skills-dir dot-eclaw))
-          "Error: `.eclaw/skills' resolves outside `.eclaw'.")
+         ((not (eclaw--canonical-under-directory-p skills-dir root-real))
+          "Error: `skills' resolves outside `eclaw-folder'.")
          ((not (eclaw--canonical-under-directory-p skill-subdir skills-dir))
-          "Error: skill directory resolves outside `.eclaw/skills/'.")
+          "Error: skill directory resolves outside `skills/'.")
          ((not (eclaw--canonical-under-directory-p target skill-subdir))
           "Error: SKILL.md path escapes the skill directory.")
          ((not (string-equal (file-name-nondirectory target) "SKILL.md"))
@@ -312,7 +301,7 @@ Return a status string."
                   (write-region (point-min) (point-max) target nil 'nomessage))
                 (eclaw--invalidate-skills-cache)
                 (eclaw-debug-message "eclaw: skill_write updated %s" target)
-                (format "Skill saved as `.eclaw/skills/%s/SKILL.md`." skill-dir))
+                (format "Skill saved as `skills/%s/SKILL.md` under `eclaw-folder'." skill-dir))
             (error (format "Error writing skill file %S: %S" target err))))))))))
 
 (defun eclaw--json-truthy-p (value)
@@ -375,7 +364,7 @@ Optional RISK is `:read' (default) or `:write' (side effects on disk)."
     (_ nil)))
 
 (defvar eclaw--tool-approval-rules nil
-  "Alist of (RULE-KEY . POLICY) persisted allow rules under `eclaw-data-dir'.
+  "Alist of (RULE-KEY . POLICY) persisted allow rules under `eclaw-folder'.
 RULE-KEY is a tool name string (global) or a list `(TOOL-NAME PROJECT ARGS-KEY)'
 with nil wildcards for broader scopes.  POLICY is the symbol `allow'.  Loaded
 lazily from `eclaw--tool-approval-rules-file'.")
@@ -441,13 +430,12 @@ Same key shapes as `eclaw--tool-approval-rules'; cleared when Emacs exits.")
 (defun eclaw--tool-approval-query-key (tool-name args)
   "Build the query key for TOOL-NAME and parsed ARGS."
   (list tool-name
-        (eclaw--skills-project-root)
+        nil
         (and args (eclaw--tool-approval-canonical-args-key args))))
 
 (defun eclaw--tool-approval-rules-file ()
   "Return the path to the persisted tool approval rules file."
-  (expand-file-name "tool-approval-rules.el"
-                    (expand-file-name eclaw-data-dir)))
+  (expand-file-name "tool-approval-rules.el" (eclaw--folder)))
 
 (defun eclaw--tool-approval-rules-load ()
   "Load `eclaw--tool-approval-rules' from disk once per session."
@@ -538,10 +526,8 @@ Same key shapes as `eclaw--tool-approval-rules'; cleared when Emacs exits.")
 (defun eclaw--user-approves-tool-call-p (tool-name json-args-summary args)
   "Ask whether TOOL-NAME may run with parsed ARGS.
 JSON-ARGS-SUMMARY is echoed (truncated).
-Return `once', `session', `session-project', `session-exact', `remember',
-`remember-project', `remember-exact', or nil."
-  (let* ((project (eclaw--skills-project-root))
-         (args-key (and args (eclaw--tool-approval-canonical-args-key args)))
+Return `once', `session', `session-exact', `remember', `remember-exact', or nil."
+  (let* ((args-key (and args (eclaw--tool-approval-canonical-args-key args)))
          (question
           (concat (format "eclaw: allow tool `%s'? " tool-name)
                   (unless (string-empty-p json-args-summary)
@@ -553,21 +539,13 @@ Return `once', `session', `session-project', `session-exact', `remember',
             ("session" ?s "Allow this tool for this Emacs session (global)")
             ("remember" ?r "Always allow this tool (global, saved)")
             ("deny" ?d "Skip; send refusal to the model"))))
-    (when project
-      (setq answers
-            (append
-             `(("session-project" ?i
-                ,(format "Allow `%s' for this Emacs session in this project" tool-name))
-               ("remember-project" ?p
-                ,(format "Always allow `%s' in this project (saved)" tool-name)))
-             answers)))
-    (when (and project args-key)
+    (when args-key
       (setq answers
             (append
              '(("session-exact" ?t
                 "Allow this tool with these arguments for this Emacs session")
                ("remember-exact" ?e
-                "Always allow this tool with these arguments in this project (saved)"))
+                "Always allow this tool with these arguments (saved)"))
              answers)))
     (condition-case nil
         (if (fboundp 'read-answer)
@@ -577,21 +555,15 @@ Return `once', `session', `session-project', `session-exact', `remember',
               ("session"
                (eclaw--tool-approval-session-rule-add tool-name)
                'session)
-              ("session-project"
-               (eclaw--tool-approval-session-rule-add (list tool-name project))
-               'session-project)
               ("session-exact"
                (eclaw--tool-approval-session-rule-add
-                (list tool-name project args-key))
+                (list tool-name nil args-key))
                'session-exact)
               ("remember"
                (eclaw--tool-approval-rule-add tool-name)
                'remember)
-              ("remember-project"
-               (eclaw--tool-approval-rule-add (list tool-name project))
-               'remember-project)
               ("remember-exact"
-               (eclaw--tool-approval-rule-add (list tool-name project args-key))
+               (eclaw--tool-approval-rule-add (list tool-name nil args-key))
                'remember-exact)
               (_ nil)))
           (if (y-or-n-p question) 'once nil))
@@ -1384,9 +1356,9 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
     "Error: notes_write_text requires \"relative_path\" in arguments."))
 
 (eclaw-deftool skill_write
-  "Write `.eclaw/skills/<skill_dir>/SKILL.md` (full body; UTF-8)."
+  "Write `skills/<skill_dir>/SKILL.md` under `eclaw-folder' (full body; UTF-8)."
   ((skill_dir :string
-              "Single directory name under .eclaw/skills/ ([A-Za-z0-9_-], max 64 chars).")
+              "Single directory name under skills/ ([A-Za-z0-9_-], max 64 chars).")
    (content :string "Full SKILL.md body (UTF-8), including optional YAML front matter."))
   (:risk :write)
   (if skill_dir

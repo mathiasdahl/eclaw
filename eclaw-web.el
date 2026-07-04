@@ -63,11 +63,6 @@
   :type 'string
   :group 'eclaw-web)
 
-(defcustom eclaw-web-project-root nil
-  "Directory used as `default-directory' during web chat.
-When nil, uses `eclaw--session-project' or `default-directory' at request time."
-  :type 'string
-  :group 'eclaw-web)
 
 (defcustom eclaw-web-root nil
   "Directory containing `eclaw-web.el' and the `web/' subdirectory.
@@ -88,6 +83,7 @@ from a scratch buffer with a surprising `default-directory')."
 (declare-function eclaw--eclaw-buffer-setup "eclaw" ())
 (declare-function eclaw-chat "eclaw" (prompt))
 (declare-function eclaw-reset-conversation "eclaw" ())
+(declare-function eclaw--folder "eclaw" ())
 (declare-function eclaw-usage-stats "eclaw" ())
 
 (defun eclaw-web--data-dir ()
@@ -120,12 +116,9 @@ from a scratch buffer with a surprising `default-directory')."
     (insert-file-contents-literally (eclaw-web--asset-path name))
     (buffer-string)))
 
-(defun eclaw-web--project-root ()
-  "Return the project directory for web chat requests."
-  (expand-file-name
-   (or eclaw-web-project-root
-       eclaw--session-project
-       default-directory)))
+(defun eclaw-web--default-directory ()
+  "Return `default-directory' for web chat tool calls."
+  (eclaw--folder))
 
 (defun eclaw-web--url ()
   (format "http://%s:%d/" eclaw-web-host eclaw-web-port))
@@ -164,7 +157,7 @@ from a scratch buffer with a surprising `default-directory')."
 
 (defun eclaw-web--with-web-context (fun)
   "Run FUN with web project directory and tool approval disabled."
-  (let ((default-directory (eclaw-web--project-root))
+  (let ((default-directory (eclaw-web--default-directory))
         (eclaw-tool-approval-mode 'off))
     (funcall fun)))
 

@@ -7,7 +7,7 @@ eclaw injects the **session start** date and time into every completion request 
 `eclaw-system-message` builds the system role content as:
 
 1. `eclaw-system-prompt` (static instructions)
-2. Optional project skills index (`eclaw--skills-system-block`)
+2. Optional agent skills index (`eclaw--skills-system-block`)
 3. Session context block (`eclaw--session-context-block`)
 
 The session block looks like:
@@ -21,11 +21,11 @@ The timestamp uses Emacs local time (`format-time-string` with `%Z` for the time
 
 ## When it is set and cleared
 
-- **Set:** on the first `eclaw-chat` turn via `eclaw--ensure-session-started`, which records `eclaw--session-started` and `eclaw--session-project` (absolute `default-directory` at session start).
+- **Set:** on the first `eclaw-chat` turn via `eclaw--ensure-session-started`, which records `eclaw--session-started`.
 - **Frozen:** the same formatted string is reused for every completion round and user turn until the session ends. It does **not** refresh on each HTTP request.
 - **Cleared:** `eclaw-reset-conversation` sets `eclaw--session-started` to `nil`; the next chat turn starts a new session with a new timestamp.
 
-The archive YAML frontmatter `started:` field uses the same `eclaw--session-started` value.
+The archive YAML frontmatter `started:` field uses the same `eclaw--session-started` value. The `folder:` field records `eclaw-folder` at archive time.
 
 ## Why once per session
 

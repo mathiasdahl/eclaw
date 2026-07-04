@@ -1,12 +1,18 @@
-# eclaw project agent skills
+# eclaw agent skills
 
-eclaw discovers **Agent Skills**-style capabilities in a project when a `.eclaw` directory exists in a parent of `default-directory`. Only this layout is scanned:
+eclaw discovers **Agent Skills**-style capabilities under `eclaw-folder` (default `~/.eclaw/`). Only this layout is scanned:
 
 ```text
-<project-root>/.eclaw/skills/<skill-id>/SKILL.md
+<eclaw-folder>/skills/<skill-id>/SKILL.md
 ```
 
 `<skill-id>` is usually a short directory name (for example `deploy` or `lint-rules`). Names and descriptions for the model index come from the frontmatter when present.
+
+Configure the root with `M-x customize-variable RET eclaw-folder RET` or:
+
+```emacs-lisp
+(setq eclaw-folder (expand-file-name "~/.eclaw/"))
+```
 
 ## `SKILL.md` format
 
@@ -32,8 +38,10 @@ If `name` is omitted, the parent directory name is used. If `description` is omi
 - The skills section is appended to every system message built by `eclaw-system-message`.
 - Paths in the index are absolute so `read_file` works regardless of `default-directory`.
 - Results are cached until the set of `SKILL.md` files or their modification times change.
+- `skill_write` creates or replaces skills only under `eclaw-folder/skills/`.
 
 ## Non-goals (current)
 
+- Per-project `.eclaw/` directories are not scanned.
 - Global skills directories (for example `~/.cursor/skills`) are not loaded.
-- Arbitrary `SKILL.md` paths elsewhere under `.eclaw/` are ignored; only `.eclaw/skills/*/SKILL.md` counts.
+- Arbitrary `SKILL.md` paths elsewhere under `eclaw-folder/` are ignored; only `skills/*/SKILL.md` counts.

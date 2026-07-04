@@ -17,23 +17,22 @@ Write tools (`notes_write_text`, `skill_write`, …) are tagged `:write` in the 
 2. Matching persisted **allow** rule → run handler; transcript notes `saved-rule`.
 3. Matching **session** allow rule → run handler; transcript notes `session-rule`.
 4. Batch Emacs (`noninteractive`) → `eclaw-tool-approval-noninteractive` (`allow` or `deny`).
-5. Interactive minibuffer → allow once, allow for this Emacs session, remember (several scopes), or deny. Each choice has a single-key shortcut (`a`, `s`, `i`, `t`, `r`, `p`, `e`, `d`; see prompt).
+5. Interactive minibuffer → allow once, allow for this Emacs session, remember (global or args-scoped), or deny. Each choice has a single-key shortcut (`a`, `s`, `t`, `r`, `e`, `d`; see prompt).
 
 Denial returns `eclaw--tool-call-not-approved-msg` without calling the handler.
 
 ## Persisted rules
 
-File: `eclaw-data-dir/tool-approval-rules.el` (Elisp `read` / `prin1` alist).
+File: `<eclaw-folder>/tool-approval-rules.el` (Elisp `read` / `prin1` alist). Default folder is `~/.eclaw/`.
 
 Rule keys (broad → narrow):
 
 - `"read_file"` — allow that tool everywhere (legacy Slice D format).
 - `("read_file")` — same (normalized).
-- `("read_file" "/path/to/project")` — allow in one project (directory containing `.eclaw`).
-- `("read_file" "/path/to/project" "{\"path\":\"src\"}")` — allow with canonical JSON args in that project.
-- `("read_file" "/path/to/project" "{\"path\":\"src/foo.el\",\"offset\":100,\"limit\":50}")` — allow a specific line-range read in that project.
+- `("read_file" nil "{\"path\":\"src\"}")` — allow with canonical JSON args.
+- `("read_file" nil "{\"path\":\"src/foo.el\",\"offset\":100,\"limit\":50}")` — allow a specific line-range read.
 
-Matching uses wildcards: a stored global rule matches any project and args; a project rule matches any args in that project.
+The middle element of a scoped key is reserved for future use and is always `nil` today. Matching uses wildcards: a stored global rule matches any args; an args-scoped rule matches only that canonical JSON key.
 
 **Commands:** `M-x eclaw-list-tool-approval-rules`, `M-x eclaw-remove-tool-approval-rule`, `M-x eclaw-clear-tool-approval-rules`.
 
@@ -44,14 +43,12 @@ In-memory allow rules for the running Emacs process (`eclaw--tool-approval-sessi
 **Minibuffer “session” options:**
 
 - **session** (`s`) — global tool rule for this Emacs session.
-- **session-project** (`i`) — when a `.eclaw` project root exists.
-- **session-exact** (`t`) — project + canonical args (when args are non-empty).
+- **session-exact** (`t`) — tool + canonical args (when args are non-empty).
 
 **Minibuffer “remember” options** (persisted to `tool-approval-rules.el`):
 
 - **remember** (`r`) — global tool rule.
-- **remember-project** (`p`) — when a `.eclaw` project root exists.
-- **remember-exact** (`e`) — project + canonical args (when args are non-empty).
+- **remember-exact** (`e`) — tool + canonical args (when args are non-empty).
 
 ## Multi-tool rounds
 

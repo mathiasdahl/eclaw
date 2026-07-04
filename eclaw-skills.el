@@ -1,4 +1,4 @@
-;;; eclaw-skills.el --- Project agent skills index for eclaw  -*- lexical-binding: nil -*-
+;;; eclaw-skills.el --- Agent skills index for eclaw  -*- lexical-binding: nil -*-
 
 ;; Copyright (C) 2026-2026  Mathias Dahl
 
@@ -25,7 +25,7 @@
 ;;; Commentary:
 
 ;;
-;; Project-local Agent Skills discovery (`.eclaw/skills/*/SKILL.md'),
+;; Agent Skills discovery (`skills/*/SKILL.md' under `eclaw-folder'),
 ;; mtime-based cache, and the index block appended to the system message.
 ;;
 
@@ -33,12 +33,13 @@
 
 ;; Runtime: `eclaw' loads this before `eclaw-system-message'.
 (declare-function eclaw-debug-message "eclaw" (format-string &rest args))
+(declare-function eclaw--folder "eclaw" ())
 
-;;; Project skills (Agent Skills index, project-local only)
+;;; Agent skills (Agent Skills index under `eclaw-folder')
 
 (defvar eclaw--skills-cache nil
   "Internal plist used by `eclaw--project-skills-index'.
-Keys are :root (string directory), :signature (string), :skills (list).")
+Keys are :folder (string directory), :signature (string), :skills (list).")
 
 (defun eclaw--file-mtime-float (file)
   "Return modification time of FILE as a float, for stable comparisons."
@@ -49,12 +50,6 @@ Keys are :root (string directory), :signature (string), :skills (list).")
      (if (fboundp 'file-attribute-modification-time)
          (file-attribute-modification-time attr)
        (nth 5 attr)))))
-
-(defun eclaw--skills-project-root ()
-  "Return project directory containing `.eclaw', or nil if none.
-Uses `default-directory' as the starting point."
-  (when-let ((dir (locate-dominating-file default-directory ".eclaw")))
-    (directory-file-name (expand-file-name dir))))
 
 (defun eclaw--skill-yaml-get (key beg end)
   "In the current buffer, read simple `KEY: value' line between BEG and END.
@@ -149,38 +144,33 @@ Return plist (:name :description :path).  DEFAULT-DIR-NAME is used when
                                                  (plist-get b :name))))))))
 
 (defun eclaw--project-skills-index ()
-  "Return cached list of project skill plists, or nil if none.
-Skills are discovered only from `.eclaw/skills/*/SKILL.md' relative to the
-project root (`eclaw--skills-project-root').  List is sorted by name."
-  (let ((root (eclaw--skills-project-root)))
-    (cond
-     ((null root)
-      nil)
-     (t
-      (let* ((skills-dir (expand-file-name "skills" (expand-file-name ".eclaw" root)))
-             (loaded (eclaw--skills-load-from-directory skills-dir))
-             (sig (plist-get loaded :signature))
-             (cached eclaw--skills-cache))
-        (if (and cached
-                 (equal root (plist-get cached :root))
-                 (equal sig (plist-get cached :signature)))
-            (plist-get cached :skills)
-          (let* ((skills (plist-get loaded :skills))
-                 (plist (list :root root :signature sig :skills skills)))
-            (setq eclaw--skills-cache plist)
+  "Return cached list of skill plists under `eclaw-folder'/`skills/', or nil if none.
+List is sorted by name."
+  (let ((folder (eclaw--folder)))
+    (let* ((skills-dir (expand-file-name "skills" folder))
+           (loaded (eclaw--skills-load-from-directory skills-dir))
+           (sig (plist-get loaded :signature))
+           (skills (plist-get loaded :skills))
+           (cached eclaw--skills-cache))
+      (if (and cached
+               (equal folder (plist-get cached :folder))
+               (equal sig (plist-get cached :signature)))
+          (plist-get cached :skills)
+        (let ((plist (list :folder folder :signature sig :skills skills)))
+          (setq eclaw--skills-cache plist)
+          (when skills
             (eclaw-debug-message
-             "eclaw: project skills index %s (%d skill%s)"
-             (if skills "loaded" "empty")
+             "eclaw: skills index loaded (%d skill%s)"
              (length skills)
-             (if (= 1 (length skills)) "" "s"))
-            skills)))))))
+             (if (= 1 (length skills)) "" "s")))
+          skills)))))
 
 (defun eclaw--skills-system-block ()
-  "Return Markdown text listing project skills for the system prompt, or \"\"."
+  "Return Markdown text listing agent skills for the system prompt, or \"\"."
   (if-let ((skills (eclaw--project-skills-index)))
-      (concat "\n\n## Project agent skills (index only)\n\n"
+      (concat "\n\n## Agent skills (index only)\n\n"
               "These entries follow the Agent Skills convention (each skill is a "
-              "directory under `.eclaw/skills/' with a `SKILL.md'). Only this index "
+              "directory under `skills/' with a `SKILL.md'). Only this index "
               "is included here; the full instructions live in each file path below. "
               "When the user's task fits a skill's description, use the `read_file' "
               "tool on that path first, then follow the skill.\n\n"

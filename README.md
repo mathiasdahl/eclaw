@@ -39,6 +39,15 @@ The tool calls your personal `mailme-mail` function, which must be loaded before
 sending. Recipient is restricted to `work` or `home` only. Tagged `:write` — always
 approval-gated under default `eclaw-tool-approval-mode`.
 
+All eclaw-owned data lives under one directory, `eclaw-folder` (default `~/.eclaw/`):
+conversation archives in `conversations/`, notes in `notes/`, agent skills in
+`skills/`, the JSONL log as `eclaw-log.jsonl`, and tool-approval rules in
+`tool-approval-rules.el`. See [`docs/skills.md`](docs/skills.md).
+
+```emacs-lisp
+(setq eclaw-folder (expand-file-name "~/my-eclaw/"))
+```
+
 Tool approval is **on by default** (`eclaw-tool-approval-mode` is `all`): every
 local tool call prompts in the minibuffer until you allow it once, for the
 session, or via a saved rule. See [`docs/tool-approval.md`](docs/tool-approval.md).
@@ -148,7 +157,8 @@ with a missing `web/chat.html`, set `eclaw-web-root` to your eclaw clone:
 ```
 
 The web UI calls the same `eclaw-chat` orchestration as `M-x eclaw-agent-chat` and
-shares global `eclaw-conversation` with the `*eclaw*` buffer.
+shares global `eclaw-conversation` with the `*eclaw*` buffer. Tool calls use
+`eclaw-folder` as `default-directory` (not Emacs's current buffer directory).
 
 **Security:** do not forward this port or bind to a public interface. While handling
 web requests, `eclaw-tool-approval-mode` is forced to `off`, so local tools run

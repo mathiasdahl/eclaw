@@ -36,7 +36,7 @@
 ;; messages and optionally advertises local project tools (`read_file',
 ;; `list_directory', `glob_files', `grep_files') guarded by a sensitive-path
 ;; policy, plus narrow writes (`notes_write_text', `skill_write') limited to
-;; `notes/*.txt' and `.eclaw/skills/<name>/SKILL.md' under the `.eclaw' root.
+;; `notes/*.txt' and `skills/<name>/SKILL.md' under `eclaw-folder'.
 ;; `glob_files' and `grep_files' use `eclaw-grep-program' (ripgrep preferred,
 ;; GNU grep fallback); search respects `.gitignore' by default.
 ;;
@@ -49,7 +49,7 @@
 ;;
 ;;   eclaw.el         — this file: configuration, conversation, request assembly,
 ;;                      orchestration, logging, UI entrypoints
-;;   eclaw-skills.el  — `.eclaw/skills' index block for the system message
+;;   eclaw-skills.el  — `skills/' index block for the system message
 ;;   eclaw-tools.el   — `eclaw-deftool' registry, handlers, dispatch, sensitive-path
 ;;                      policy, search-tool backends
 ;;   eclaw-http.el    — OpenRouter POST and response accessors (see
@@ -66,7 +66,7 @@
 ;; - Configuration (`eclaw.el'): API key, model id, system prompt, debug toggle.
 ;; - Conversation (`eclaw.el'): message alists, `eclaw-conversation' trace,
 ;;   archives, buffer `*eclaw*'.
-;; - Project skills (`eclaw-skills.el'): index-only `.eclaw/skills/*/SKILL.md'.
+;; - Agent skills (`eclaw-skills.el'): index-only `skills/*/SKILL.md' under `eclaw-folder'.
 ;; - Tools (`eclaw-tools.el'): registry, handlers, approval gate, path policy.
 ;; - Request assembly (`eclaw.el`): `eclaw-build-chat-payload' attaches `tools'
 ;;   from `eclaw-tool-definitions' (`eclaw-tools.el').
@@ -84,7 +84,7 @@
 ;;
 ;; Limitations: blocking HTTP, global session, no streaming.
 ;;
-;; Project agent skills: optional index of `.eclaw/skills/*/SKILL.md` (Agent
+;; Agent skills: optional index of `skills/*/SKILL.md` under `eclaw-folder` (Agent
 ;; Skills-style layout) appended to the system message; bodies are not inlined.
 
 ;;; Code:
@@ -132,12 +132,12 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "When you have a specific URL to read, use `web_fetch'. Prefer search first, then "
    "fetch top results for detail. "
    "When the user wants durable notes, use `notes_write_text' to create or update "
-   "only `.txt' files under the project's `notes/' directory (paths are relative to "
+   "only `.txt' files under `eclaw-folder/notes/' (paths are relative to "
    "`notes/`; the tool prepends `YYYY-MM-DD_HHMMSS-' to the file name). When guidance "
    "should persist as reusable agent instructions, use "
-   "`skill_write' to add or replace `.eclaw/skills/<skill_dir>/SKILL.md' "
+   "`skill_write' to add or replace `skills/<skill_dir>/SKILL.md' under `eclaw-folder' "
    "(skill_dir uses only letters, digits, hyphen, underscore; max length 64). "
-   "Both tools apply only under the project directory that contains `.eclaw'."
+   "Both write tools store data only under `eclaw-folder'."
    "When asked for a plan/proposal/options first, present it and wait for explicit approval before acting.")
   "Text of the system role message prepended to every completion request.")
 
@@ -151,7 +151,7 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
 
 (defcustom eclaw-debug nil
   "When non-nil, emit verbose eclaw progress in the echo area.
-Includes token usage, project skills index reloads, and tool side-effect
+Includes token usage, skills index reloads, and tool side-effect
 details.  Orchestration progress uses `eclaw-progress-message'; cap/limit
 notices are always shown."
   :type 'boolean
@@ -190,17 +190,26 @@ Normally off; eclaw emits its own progress via `eclaw-progress-message'."
   (setq eclaw-debug (not eclaw-debug))
   (eclaw-message "eclaw debug %s" (if eclaw-debug "on" "off")))
 
-(defcustom eclaw-data-dir
+(defcustom eclaw-folder
   (expand-file-name "~/.eclaw/")
-  "Directory under the user's home for eclaw data (archives, logs, etc.)."
+  "Root directory for all eclaw data.
+Conversation archives live in `conversations/', notes in `notes/', agent skills
+in `skills/', the JSONL log as `eclaw-log.jsonl', and tool-approval rules in
+`tool-approval-rules.el' — all relative to this directory."
   :type 'directory
   :group 'eclaw)
 
-(defcustom eclaw-conversation-archive-dir
-  (expand-file-name "conversations/" (expand-file-name eclaw-data-dir))
-  "Directory for Markdown conversation archives written by `eclaw-archive-current-conversation'."
-  :type 'directory
-  :group 'eclaw)
+(defun eclaw--folder ()
+  "Return the absolute path to `eclaw-folder'."
+  (expand-file-name eclaw-folder))
+
+(defun eclaw--conversation-archive-dir ()
+  "Return the directory for conversation archive Markdown files."
+  (expand-file-name "conversations/" (eclaw--folder)))
+
+(defun eclaw--agent-log-file ()
+  "Return the path to the JSONL log file under `eclaw-folder'."
+  (expand-file-name "eclaw-log.jsonl" (eclaw--folder)))
 
 (defcustom eclaw-archive-include-tools t
   "When non-nil, append a collapsible tool-activity section to archived conversations."
@@ -227,9 +236,6 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
 (defvar eclaw--session-started nil
   "Start time of the current archivable session, or nil after reset.")
-
-(defvar eclaw--session-project nil
-  "`default-directory' at session start, stored as an absolute path.")
 
 (defun eclaw--usage-zero ()
   "Return a fresh usage alist with zero prompt and completion tokens."
@@ -271,10 +277,9 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
                                              (eclaw--emacs-started-at)))))
 
 (defun eclaw--ensure-session-started ()
-  "Set `eclaw--session-started' and `eclaw--session-project' on first chat turn."
+  "Set `eclaw--session-started' on the first chat turn."
   (unless eclaw--session-started
-    (setq eclaw--session-started (current-time))
-    (setq eclaw--session-project (expand-file-name default-directory))))
+    (setq eclaw--session-started (current-time))))
 
 (defun eclaw--session-context-block ()
   "Return session-start date/time text for the system prompt, or \"\"."
@@ -317,7 +322,7 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
 (defun eclaw--conversation-archive-path (time slug)
   "Return absolute archive file path for TIME and optional SLUG."
-  (let* ((dir (expand-file-name eclaw-conversation-archive-dir))
+  (let* ((dir (eclaw--conversation-archive-dir))
          (stamp (format-time-string "%Y-%m-%d_%H%M%S" time))
          (name (if (and slug (not (string-empty-p slug)))
                    (format "%s_%s.md" stamp slug)
@@ -366,18 +371,18 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 (defun eclaw--conversation-archive-frontmatter (ended-time)
   "Return YAML frontmatter for an archive ending at ENDED-TIME."
   (format
-   "---\nid: %s\nstarted: %s\nended: %s\nmodel: %s\nproject: %s\nturns: %s\nsource: eclaw-archive\n---\n\n"
+   "---\nid: %s\nstarted: %s\nended: %s\nmodel: %s\nfolder: %s\nturns: %s\nsource: eclaw-archive\n---\n\n"
    (format-time-string "%Y-%m-%dT%H:%M:%S%z" ended-time)
    (if eclaw--session-started
        (format-time-string "%Y-%m-%dT%H:%M:%S%z" eclaw--session-started)
      "")
    (format-time-string "%Y-%m-%dT%H:%M:%S%z" ended-time)
    eclaw-model
-   (or eclaw--session-project (expand-file-name default-directory))
+   (eclaw--folder)
    (eclaw--conversation-turn-count)))
 
 (defun eclaw-archive-current-conversation ()
-  "Save the current session to a Markdown file under `eclaw-conversation-archive-dir'.
+  "Save the current session to a Markdown file under `eclaw-folder'/`conversations/'.
 Return the written file path, or nil when there is nothing to archive."
   (when (eclaw--session-has-content-p)
     (let* ((ended (current-time))
@@ -418,7 +423,6 @@ When archiving fails, the session is left unchanged."
        (user-error "Archive failed: %s" (error-message-string err)))))
   (setq eclaw-conversation nil)
   (setq eclaw--session-started nil)
-  (setq eclaw--session-project nil)
   (setq eclaw--usage-conversation (eclaw--usage-zero))
   (when eclaw-archive-clear-buffer-on-reset
     (eclaw--clear-eclaw-buffer))
@@ -426,8 +430,7 @@ When archiving fails, the session is left unchanged."
 
 (defun eclaw-system-message ()
   "Return one system message alist using `eclaw-system-prompt'.
-When the current `default-directory' is under a project with
-`.eclaw/skills/*/SKILL.md', append an index-only skills section.
+When skills exist under `eclaw-folder'/`skills/', append an index-only skills section.
 When `eclaw--session-started' is set, append a frozen session context block."
   `((role . "system")
     (content . ,(concat eclaw-system-prompt
@@ -676,7 +679,7 @@ PROMPT is read interactively when called as a command."
 
 (defun eclaw--list-conversation-files ()
   "Return archive `.md' files sorted newest first."
-  (let ((dir (expand-file-name eclaw-conversation-archive-dir)))
+  (let ((dir (eclaw--conversation-archive-dir)))
     (when (file-directory-p dir)
       (sort
        (directory-files dir nil "\\`[^.].*\\.md\\'")
@@ -686,7 +689,7 @@ PROMPT is read interactively when called as a command."
 
 (defun eclaw--conversation-file-label (file)
   "Return a completion label for archive FILE."
-  (let* ((full (expand-file-name file eclaw-conversation-archive-dir))
+  (let* ((full (expand-file-name file (eclaw--conversation-archive-dir)))
          (mtime (file-attribute-modification-time (file-attributes full)))
          (stamp (when mtime (format-time-string "%Y-%m-%d %H:%M" mtime))))
     (if stamp
@@ -696,7 +699,7 @@ PROMPT is read interactively when called as a command."
 (defun eclaw-open-conversation (&optional file)
   "Open a saved conversation archive in a read-only markdown buffer."
   (interactive
-   (let* ((dir (expand-file-name eclaw-conversation-archive-dir))
+   (let* ((dir (eclaw--conversation-archive-dir))
           (files (eclaw--list-conversation-files))
           (candidates
            (mapcar (lambda (f)
@@ -705,16 +708,16 @@ PROMPT is read interactively when called as a command."
      (unless files
        (user-error "No conversation archives in %s" dir))
      (list (completing-read "Conversation: " candidates nil t))))
-  (let ((path (expand-file-name file eclaw-conversation-archive-dir)))
+  (let ((path (expand-file-name file (eclaw--conversation-archive-dir))))
     (unless (file-readable-p path)
       (user-error "Conversation file not readable: %s" path))
     (find-file-read-only path)
     (eclaw--eclaw-buffer-setup)))
 
 (defun eclaw-list-conversations ()
-  "Open `eclaw-conversation-archive-dir' in Dired."
+  "Open `eclaw-folder'/`conversations/' in Dired."
   (interactive)
-  (let ((dir (expand-file-name eclaw-conversation-archive-dir)))
+  (let ((dir (eclaw--conversation-archive-dir)))
     (make-directory dir t)
     (dired dir)))
 
@@ -729,25 +732,20 @@ PROMPT is read interactively when called as a command."
 
 ;;; JSONL log file
 
-(defcustom eclaw-agent-log-file
-  (expand-file-name "eclaw-log.jsonl" (expand-file-name eclaw-data-dir))
-  "File path for JSONL log lines written by `eclaw-append-json-log'."
-  :type 'file
-  :group 'eclaw)
-
 (defun eclaw-append-json-log (data)
-  "Append DATA, JSON-encoded, as one line to `eclaw-agent-log-file'."
-  (make-directory (file-name-directory (expand-file-name eclaw-agent-log-file)) t)
-  (with-temp-buffer
-    (insert
-     (json-encode data))
-    ;; JSONL separator
-    (goto-char (point-max))
-    (insert "\n")
-    (append-to-file
-     (point-min)
-     (point-max)
-     eclaw-agent-log-file)))
+  "Append DATA, JSON-encoded, as one line to the JSONL log under `eclaw-folder'."
+  (let ((path (eclaw--agent-log-file)))
+    (make-directory (file-name-directory path) t)
+    (with-temp-buffer
+      (insert
+       (json-encode data))
+      ;; JSONL separator
+      (goto-char (point-max))
+      (insert "\n")
+      (append-to-file
+       (point-min)
+       (point-max)
+       path))))
 
 (provide 'eclaw)
 ;;; eclaw.el ends here
