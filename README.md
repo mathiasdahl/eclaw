@@ -157,8 +157,8 @@ with a missing `web/chat.html`, set `eclaw-web-root` to your eclaw clone:
 ```
 
 The web UI calls the same `eclaw-chat` orchestration as `M-x eclaw-agent-chat` and
-shares global `eclaw-conversation` with the `*eclaw*` buffer. Tool calls use
-`eclaw-folder` as `default-directory` (not Emacs's current buffer directory).
+shares global `eclaw-conversation` with the `*eclaw*` buffer. Filesystem tool
+calls resolve paths under `eclaw-folder` (not Emacs's current buffer directory).
 
 **Security:** do not forward this port or bind to a public interface. While handling
 web requests, `eclaw-tool-approval-mode` is forced to `off`, so local tools run

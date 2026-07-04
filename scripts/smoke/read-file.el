@@ -20,7 +20,9 @@
        (slice-result)
        (tail-result)
        (beyond-result)
-       (sensitive-result))
+       (sensitive-result)
+       (outside-result))
+  (setq eclaw-folder tmpdir)
   (smoke--write-lines-file big-file 300)
   (smoke--write-lines-file small-file 3)
 
@@ -45,10 +47,14 @@
   (smoke--assert "offset beyond EOF is error string"
                  (string-match-p "^Error: read_file offset" beyond-result))
 
+  (setq outside-result (eclaw-tool-read-file "/etc/passwd"))
+  (smoke--assert "path outside eclaw-folder denied"
+                 (string-equal outside-result eclaw--tool-path-outside-folder-msg))
+
   (when (file-exists-p sensitive)
     (setq sensitive-result (eclaw-tool-read-file sensitive))
-    (smoke--assert "sensitive path denied"
-                   (string-equal sensitive-result eclaw--sensitive-path-msg)))
+    (smoke--assert "sensitive path outside eclaw-folder uses folder guard"
+                   (string-equal sensitive-result eclaw--tool-path-outside-folder-msg)))
 
   (delete-directory tmpdir t)
   (message "smoke read-file: OK"))

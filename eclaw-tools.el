@@ -196,6 +196,40 @@ directory with or without a trailing slash."
             (and (> (length canon-path) (length pre))
                  (string-prefix-p pre canon-path)))))))
 
+(defconst eclaw--tool-path-outside-folder-msg
+  "Error: path is outside `eclaw-folder' (eclaw tools are confined to the eclaw data root)."
+  "Constant denial message when a tool path escapes `eclaw-folder'.")
+
+(defun eclaw--tool-folder-root ()
+  "Return canonical absolute path to `eclaw-folder', or nil when unresolved."
+  (eclaw--canonical-path (eclaw--folder)))
+
+(defun eclaw--tool-resolve-path (path)
+  "Resolve optional PATH under `eclaw-folder'.
+Return (CANONICAL-PATH . nil) on success, or (nil . ERROR-STRING) on failure.
+When PATH is nil or empty/whitespace, use the `eclaw-folder' root."
+  (let* ((root (eclaw--folder))
+         (root-real (eclaw--tool-folder-root))
+         (trimmed (when path (string-trim path)))
+         (raw (if (or (null trimmed) (string-empty-p trimmed))
+                  root
+                (if (file-name-absolute-p trimmed)
+                    trimmed
+                  (expand-file-name trimmed root))))
+         (canon (eclaw--canonical-path raw)))
+    (cond
+     ((null root-real)
+      (cons nil "Error: could not resolve eclaw-folder."))
+     ((null canon)
+      (cons nil (format "Error: could not resolve path %S." path)))
+     ((not (eclaw--canonical-under-directory-p canon root-real))
+      (cons nil eclaw--tool-path-outside-folder-msg))
+     (t (cons canon nil)))))
+
+(defun eclaw--tool-path-in-folder-p (path)
+  "Non-nil when PATH resolves under `eclaw-folder'."
+  (and path (null (cdr (eclaw--tool-resolve-path path)))))
+
 (defun eclaw--skill-dir-name-allowed-p (name)
   "Non-nil when NAME is a single safe skill directory segment."
   (and name
@@ -818,11 +852,15 @@ to nil for text-only requests."
 (defun eclaw-tool-read-file (path &optional offset limit)
   "Read the file at PATH and return numbered lines as a string.
 Optional OFFSET is a 1-indexed start line (negative counts from EOF).
-Optional LIMIT caps how many lines are returned.  When `eclaw--path-sensitive-p'
-holds, return `eclaw--sensitive-path-msg'.  On other errors, return a
-human-readable description instead of signaling."
-  (let ((file (expand-file-name path)))
+Optional LIMIT caps how many lines are returned.  PATH is resolved under
+`eclaw-folder'.  When `eclaw--path-sensitive-p' holds, return
+`eclaw--sensitive-path-msg'.  On other errors, return a human-readable
+description instead of signaling."
+  (let* ((resolved (eclaw--tool-resolve-path path))
+         (file (car resolved))
+         (resolve-err (cdr resolved)))
     (cond
+     (resolve-err resolve-err)
      ((eclaw--path-sensitive-p file)
       eclaw--sensitive-path-msg)
      ((and limit (not (integerp limit)))
@@ -860,7 +898,7 @@ human-readable description instead of signaling."
 
 (eclaw-deftool read_file
   "Read text from a file on disk. Optional offset/limit return a line range."
-  ((path :string "File path (absolute or relative to default directory).")
+  ((path :string "File path (absolute or relative to `eclaw-folder').")
    (offset :integer
            "1-indexed start line. Negative counts from end (e.g. -1 = last line)."
            :optional)
@@ -869,23 +907,29 @@ human-readable description instead of signaling."
           :optional))
   (if path
       (progn
-        (when (and (not (eclaw--path-sensitive-p path))
-                   (eclaw--path-is-project-skill-md-p path))
-          (eclaw-debug-message "eclaw: skill file read (model loaded skill): %s"
-                   (expand-file-name path)))
+        (let* ((resolved (eclaw--tool-resolve-path path))
+               (file (car resolved)))
+          (when (and file
+                     (not (eclaw--path-sensitive-p file))
+                     (eclaw--path-is-project-skill-md-p file))
+            (eclaw-debug-message "eclaw: skill file read (model loaded skill): %s"
+                                 file)))
         (eclaw-tool-read-file path offset limit))
     "Error: read_file requires \"path\" in arguments."))
 
 (defun eclaw-tool-list-directory (path max-entries include-hidden)
   "List up to MAX-ENTRIES entries in directory PATH.
-When INCLUDE-HIDDEN is nil, omit dotfiles.  Return a multi-line string
-or an error description."
-  (let* ((dir (expand-file-name path))
+PATH is resolved under `eclaw-folder'.  When INCLUDE-HIDDEN is nil, omit
+dotfiles.  Return a multi-line string or an error description."
+  (let* ((resolved (eclaw--tool-resolve-path path))
+         (dir (car resolved))
+         (resolve-err (cdr resolved))
          (cap (if (and max-entries (integerp max-entries) (> max-entries 0))
                   max-entries
                 200))
          (show-hidden (eclaw--json-truthy-p include-hidden)))
     (cond
+     (resolve-err resolve-err)
      ((not (file-directory-p dir))
       (format "Error: not a directory %S" dir))
      ((eclaw--path-sensitive-p dir)
@@ -920,7 +964,7 @@ or an error description."
 
 (eclaw-deftool list_directory
   "List files and subdirectories under a path (names + file/dir marker)."
-  ((path :string "Directory path (absolute or relative to default directory).")
+  ((path :string "Directory path (absolute or relative to `eclaw-folder').")
    (max_entries :integer
                 "Maximum entries to return (default 200 when omitted)."
                 :optional)
@@ -993,9 +1037,13 @@ or an error description."
                mode)))))
 
 (defun eclaw--rg-validate-search-target (path)
-  "Return an error string when PATH cannot be searched, otherwise nil."
-  (let ((abs (expand-file-name path)))
+  "Return an error string when PATH cannot be searched, otherwise nil.
+PATH must resolve under `eclaw-folder'."
+  (let* ((resolved (eclaw--tool-resolve-path path))
+         (abs (car resolved))
+         (resolve-err (cdr resolved)))
     (cond
+     (resolve-err resolve-err)
      ((not (or (file-directory-p abs) (file-regular-p abs)))
       (format "Error: not a file or directory %S" abs))
      ((eclaw--path-sensitive-p abs)
@@ -1003,9 +1051,13 @@ or an error description."
      (t nil))))
 
 (defun eclaw--rg-validate-directory (path)
-  "Return an error string when PATH is not a searchable directory, otherwise nil."
-  (let ((abs (expand-file-name path)))
+  "Return an error string when PATH is not a searchable directory, otherwise nil.
+PATH must resolve under `eclaw-folder'."
+  (let* ((resolved (eclaw--tool-resolve-path path))
+         (abs (car resolved))
+         (resolve-err (cdr resolved)))
     (cond
+     (resolve-err resolve-err)
      ((not (file-directory-p abs))
       (format "Error: not a directory %S" abs))
      ((eclaw--path-sensitive-p abs)
@@ -1050,8 +1102,12 @@ Return (STATUS . OUTPUT-STRING).  STATUS is the process exit code."
     (list shown truncated)))
 
 (defun eclaw--rg-filter-paths (paths)
-  "Drop sensitive paths from PATHS."
-  (seq-filter (lambda (p) (not (eclaw--path-sensitive-p p))) paths))
+  "Drop sensitive and out-of-scope paths from PATHS."
+  (seq-filter
+   (lambda (p)
+     (and (not (eclaw--path-sensitive-p p))
+          (eclaw--tool-path-in-folder-p p)))
+   paths))
 
 (defun eclaw--rg-parse-content-line (line)
   "Parse one grep/rg content LINE into (FILE LINE-NUM CONTENT), or nil."
@@ -1251,10 +1307,14 @@ and :max-line-length."
 (defun eclaw-tool-grep-files (path root pattern glob type output-mode multiline
                             case-insensitive head-limit offset include-hidden
                             include-ignored max-line-length)
-  "Search under PATH (or ROOT alias) for regex PATTERN; return capped results."
-  (let* ((search-path (or path root default-directory))
+  "Search under PATH (or ROOT alias) for regex PATTERN; return capped results.
+Search root defaults to `eclaw-folder' when PATH and ROOT are omitted."
+  (let* ((resolved (eclaw--tool-resolve-path (or path root)))
+         (search-path (car resolved))
+         (resolve-err (cdr resolved))
          (pat (or pattern "")))
     (cond
+     (resolve-err resolve-err)
      ((string-empty-p pat)
       "Error: grep_files requires non-empty pattern (ripgrep regex).")
      ((> (length pat) eclaw-rg-max-pattern-length)
@@ -1265,7 +1325,7 @@ and :max-line-length."
       (condition-case err
           (eclaw--rg-via-process
            (eclaw--rg-resolve-program)
-           (expand-file-name search-path)
+           search-path
            pat
            :output-mode output-mode
            :multiline multiline
@@ -1278,13 +1338,17 @@ and :max-line-length."
            :offset offset
            :max-line-length max-line-length)
         (error (format "Error during grep_files under %S: %S"
-                       (expand-file-name search-path) err)))))))
+                       search-path err)))))))
 
 (defun eclaw-tool-glob-files (path pattern head-limit offset include-hidden include-ignored)
-  "Find files under PATH matching glob PATTERN; return capped paths."
-  (let* ((root (expand-file-name (or path default-directory)))
+  "Find files under PATH matching glob PATTERN; return capped paths.
+PATH defaults to `eclaw-folder' when omitted."
+  (let* ((resolved (eclaw--tool-resolve-path path))
+         (root (car resolved))
+         (resolve-err (cdr resolved))
          (glob (or pattern "")))
     (cond
+     (resolve-err resolve-err)
      ((string-empty-p glob)
       "Error: glob_files requires non-empty pattern (glob syntax).")
      ((eclaw--rg-validate-directory root))
@@ -1297,7 +1361,7 @@ and :max-line-length."
 (eclaw-deftool grep_files
   "Search file contents under a path using ripgrep regex syntax."
   ((path :string
-         "File or directory to search (absolute or relative). Defaults to default-directory."
+         "File or directory to search (absolute or relative to `eclaw-folder'). Defaults to `eclaw-folder'."
          :optional)
    (root :string "Deprecated alias for path." :optional)
    (pattern :string "Regular expression (ripgrep syntax).")
@@ -1326,7 +1390,7 @@ and :max-line-length."
 (eclaw-deftool glob_files
   "Find files under a directory whose paths match a glob pattern."
   ((path :string
-         "Directory root (absolute or relative). Defaults to default-directory."
+         "Directory root (absolute or relative to `eclaw-folder'). Defaults to `eclaw-folder'."
          :optional)
    (pattern :string "Glob pattern, e.g. **/*.el or **/SKILL.md.")
    (head_limit :integer
@@ -1403,13 +1467,14 @@ via `eclaw--tool-approval-transcript-line' (audit of allow vs deny)."
          (if (> (length args-summary) max)
              (format " %s…" (substring args-summary 0 max))
            (format " %s" args-summary)))))
-    (if-let ((info (gethash name eclaw--tool-registry))
-             (handler (plist-get info :handler)))
-        (let ((gated-p (eclaw--tool-call-would-require-approval-p name)))
-          (let ((result
-                 (cond
-                  ((not gated-p)
-                   (funcall handler args))
+    (let ((default-directory (eclaw--folder)))
+      (if-let ((info (gethash name eclaw--tool-registry))
+               (handler (plist-get info :handler)))
+          (let ((gated-p (eclaw--tool-call-would-require-approval-p name)))
+            (let ((result
+                   (cond
+                    ((not gated-p)
+                     (funcall handler args))
                   ((eclaw--tool-approval-rule-allows-p name args)
                    (eclaw--tool-approval-transcript-line name args-summary t 'saved-rule)
                    (funcall handler args))
@@ -1435,7 +1500,7 @@ via `eclaw--tool-approval-transcript-line' (audit of allow vs deny)."
                        eclaw--tool-call-not-approved-msg))))))
             (eclaw-debug-message "eclaw: tool %s done" name)
             result))
-      (format "Unknown tool: %s" name))))
+        (format "Unknown tool: %s" name)))))
 
 (defun eclaw--tool-result-messages (tool-calls &optional synth-reason)
   "Return a list of tool message alists, one per element of TOOL-CALLS.
