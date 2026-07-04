@@ -68,6 +68,46 @@ Returns nil if missing or empty."
         (unless (string-empty-p val)
           val)))))
 
+(defun eclaw--skill-yaml-scalar (value)
+  "Format VALUE as a one-line YAML scalar for skill frontmatter."
+  (let ((v (string-trim (or value ""))))
+    (cond
+     ((string-empty-p v)
+      "\"\"")
+     ((and (not (string-match "[\n\r\"#'&*!|>%@`]" v))
+           (not (string-match "^[ \t]" v))
+           (not (string-match "[ \t]$" v))
+           (not (string-match ": " v))
+           (not (string-match "^- " v)))
+      v)
+     (t
+      (concat "\""
+              (replace-regexp-in-string "\"" "\\\\\"" v)
+              "\"")))))
+
+(defun eclaw--skill-strip-frontmatter (content)
+  "Return SKILL.md body with optional YAML frontmatter removed from CONTENT."
+  (let ((text (or content "")))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (if (not (looking-at "^---[ \t]*\n"))
+          (string-trim text)
+        (forward-line)
+        (if (re-search-forward "^---[ \t]*\n" nil t)
+            (string-trim (buffer-substring-no-properties (point) (point-max)))
+          (string-trim text))))))
+
+(defun eclaw--skill-md-with-frontmatter (name description body)
+  "Return full SKILL.md text with YAML frontmatter for NAME and DESCRIPTION."
+  (let* ((body-text (eclaw--skill-strip-frontmatter body))
+         (trimmed (string-trim body-text)))
+    (concat "---\n"
+            "name: " name "\n"
+            "description: " (eclaw--skill-yaml-scalar description) "\n"
+            "---\n\n"
+            (if (string-empty-p trimmed) "" (concat trimmed "\n")))))
+
 (defun eclaw--skill-fallback-description (body-beg body-end)
   "From Markdown body between BODY-BEG and BODY-END, derive a short summary."
   (save-restriction

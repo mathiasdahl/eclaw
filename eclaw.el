@@ -139,7 +139,9 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "`notes/`; the tool prepends `YYYY-MM-DD_HHMMSS-' to the file name). When guidance "
    "should persist as reusable agent instructions, use "
    "`skill_write' to add or replace `skills/<skill_dir>/SKILL.md' under `eclaw-folder' "
-   "(skill_dir uses only letters, digits, hyphen, underscore; max length 64). "
+   "(skill_dir uses only letters, digits, hyphen, underscore; max length 64; pass "
+   "description for the index and content as the markdown body — frontmatter is added "
+   "automatically). "
    "Both write tools store data only under `eclaw-folder'."
    "When asked for a plan/proposal/options first, present it and wait for explicit approval before acting.")
   "Text of the system role message prepended to every completion request.")

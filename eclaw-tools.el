@@ -297,14 +297,18 @@ Return a status string."
                         rel))
             (error (format "Error writing notes file %S: %S" target err))))))))))
 
-(defun eclaw-tool-skill-write (skill-dir content)
-  "Create or replace `skills/<skill-dir>/SKILL.md' under `eclaw-folder' with CONTENT (UTF-8).
-Return a status string."
+(defun eclaw-tool-skill-write (skill-dir description content)
+  "Create or replace `skills/<skill-dir>/SKILL.md' under `eclaw-folder' (UTF-8).
+DESCRIPTION is the one-line skills-index summary; CONTENT is the markdown body
+(without YAML frontmatter).  Return a status string."
   (let* ((root (eclaw--folder))
-         (text (or content "")))
+         (summary (string-trim (or description "")))
+         (text (eclaw--skill-md-with-frontmatter skill-dir summary (or content ""))))
     (cond
      ((not (eclaw--skill-dir-name-allowed-p skill-dir))
       "Error: skill_write skill_dir must be 1–64 chars [A-Za-z0-9_-] only.")
+     ((string-empty-p summary)
+      "Error: skill_write description must be a non-empty one-line summary.")
      (t
       (let* ((root-real (eclaw--canonical-path root))
              (skills-dir (eclaw--canonical-path (expand-file-name "skills" root)))
@@ -1420,15 +1424,19 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
     "Error: notes_write_text requires \"relative_path\" in arguments."))
 
 (eclaw-deftool skill_write
-  "Write `skills/<skill_dir>/SKILL.md` under `eclaw-folder' (full body; UTF-8)."
+  "Write `skills/<skill_dir>/SKILL.md` under `eclaw-folder' (UTF-8)."
   ((skill_dir :string
-              "Single directory name under skills/ ([A-Za-z0-9_-], max 64 chars).")
-   (content :string "Full SKILL.md body (UTF-8), including optional YAML front matter."))
+              "Single directory name under skills/ ([A-Za-z0-9_-], max 64 chars). Used as the skill `name' in frontmatter.")
+   (description :string
+                 "One-line summary for the skills index (YAML frontmatter); when to use this skill.")
+   (content :string "SKILL.md markdown body only (UTF-8); YAML frontmatter is added automatically."))
   (:risk :write)
   (if skill_dir
-      (if content
-          (eclaw-tool-skill-write skill_dir content)
-        "Error: skill_write requires \"content\" in arguments.")
+      (if description
+          (if content
+              (eclaw-tool-skill-write skill_dir description content)
+            "Error: skill_write requires \"content\" in arguments.")
+        "Error: skill_write requires \"description\" in arguments.")
     "Error: skill_write requires \"skill_dir\" in arguments."))
 
 (defun eclaw--dispatch-one-tool-call (tool-call)

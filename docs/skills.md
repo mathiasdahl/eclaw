@@ -38,7 +38,7 @@ If `name` is omitted, the parent directory name is used. If `description` is omi
 - The skills section is appended to every system message built by `eclaw-system-message`.
 - Paths in the index are absolute so `read_file` works regardless of `default-directory`.
 - Results are cached until the set of `SKILL.md` files or their modification times change.
-- `skill_write` creates or replaces skills only under `eclaw-folder/skills/`.
+- `skill_write` creates or replaces skills only under `eclaw-folder/skills/`. It takes `skill_dir`, `description`, and `content` (body only); YAML frontmatter with `name` (from `skill_dir`) and `description` is written automatically.
 
 ## Non-goals (current)
 
