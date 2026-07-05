@@ -308,6 +308,19 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
                        eclaw-conversation)))
     (when msg (alist-get 'content msg))))
 
+(defun eclaw-conversation-display-messages ()
+  "Return a list of user/assistant message alists for UI display.
+Skips tool messages and assistant rows with empty content (tool-only rounds)."
+  (let ((out nil))
+    (dolist (msg (or eclaw-conversation '()))
+      (let ((role (alist-get 'role msg))
+            (content (alist-get 'content msg)))
+        (when (and (member role '("user" "assistant"))
+                   (stringp content)
+                   (not (string-empty-p content)))
+          (push `((role . ,role) (content . ,content)) out))))
+    (nreverse out)))
+
 (defun eclaw--session-has-content-p ()
   "Non-nil when the current session has content worth archiving."
   (or (and (get-buffer "*eclaw*")

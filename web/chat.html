@@ -510,6 +510,7 @@
     <p class="subtitle">// localhost interface</p>
     <div id="toolbar">
       <button type="button" id="reset">New conversation</button>
+      <button type="button" id="load-session">Load session</button>
       <label class="theme-label" for="theme-select">Theme</label>
       <select id="theme-select" aria-label="Theme">
         <option value="default">Default</option>
@@ -533,6 +534,7 @@
     const promptEl = document.getElementById("prompt");
     const sendBtn = document.getElementById("send");
     const resetBtn = document.getElementById("reset");
+    const loadSessionBtn = document.getElementById("load-session");
     const themeSelect = document.getElementById("theme-select");
     const usageStatsEl = document.getElementById("usage-stats");
     const rainCanvas = document.getElementById("matrix-rain");
@@ -543,12 +545,14 @@
         thinking: "Thinking…",
         reset: "New conversation",
         resetOk: "Conversation reset.",
+        loadSession: "Load session",
         placeholder: "Message…",
       },
       matrix: {
         thinking: "Processing stream…",
         reset: "Jack out",
         resetOk: "Session terminated.",
+        loadSession: "Sync stream",
         placeholder: "Enter transmission…",
       },
     };
@@ -609,8 +613,31 @@
       }
     }
 
+    async function loadSession() {
+      try {
+        const res = await fetch("api/conversation");
+        const data = await res.json();
+        if (!res.ok) {
+          addMessage(data.error || "Failed to load session", "error");
+          return;
+        }
+        messagesEl.innerHTML = "";
+        if (Array.isArray(data.messages)) {
+          for (const msg of data.messages) {
+            if (msg.role === "user" || msg.role === "assistant") {
+              addMessage(msg.content, msg.role);
+            }
+          }
+        }
+        if (data.usage) renderUsageStats(data.usage);
+      } catch (err) {
+        addMessage(String(err), "error");
+      }
+    }
+
     function applyThemeCopy() {
       resetBtn.textContent = themeCopy("reset");
+      loadSessionBtn.textContent = themeCopy("loadSession");
       promptEl.placeholder = themeCopy("placeholder");
     }
 
@@ -752,6 +779,7 @@
     function setBusy(busy) {
       sendBtn.disabled = busy;
       resetBtn.disabled = busy;
+      loadSessionBtn.disabled = busy;
       promptEl.disabled = busy;
     }
 
@@ -809,6 +837,15 @@
       }
     });
 
+    loadSessionBtn.addEventListener("click", async () => {
+      setBusy(true);
+      try {
+        await loadSession();
+      } finally {
+        setBusy(false);
+      }
+    });
+
     promptEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -817,6 +854,7 @@
     });
 
     fetchStats();
+    loadSession();
   </script>
 </body>
 </html>

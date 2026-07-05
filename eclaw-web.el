@@ -85,6 +85,7 @@ from a scratch buffer with a surprising `default-directory')."
 (declare-function eclaw-reset-conversation "eclaw" ())
 (declare-function eclaw--folder "eclaw" ())
 (declare-function eclaw-usage-stats "eclaw" ())
+(declare-function eclaw-conversation-display-messages "eclaw" ())
 
 (defun eclaw-web--data-dir ()
   "Return the directory holding static web assets (`web/' under the eclaw repo)."
@@ -194,6 +195,13 @@ from a scratch buffer with a surprising `default-directory')."
   (with-slots (process) request
     (eclaw-web--json-response process 200 (eclaw-usage-stats))))
 
+(defun eclaw-web--handle-get-conversation (request)
+  (with-slots (process) request
+    (eclaw-web--json-response
+     process 200
+     `((messages . ,(eclaw-conversation-display-messages))
+       (usage . ,(eclaw-usage-stats))))))
+
 (defun eclaw-web--handle-post-reset (request)
   (with-slots (process) request
     (eclaw-web--with-web-context #'eclaw-reset-conversation)
@@ -209,6 +217,8 @@ from a scratch buffer with a surprising `default-directory')."
       (eclaw-web--handle-get-index request))
      ((and get-path (string= get-path "/api/stats"))
       (eclaw-web--handle-get-stats request))
+     ((and get-path (string= get-path "/api/conversation"))
+      (eclaw-web--handle-get-conversation request))
      ((and post-path (string= post-path "/api/chat"))
       (eclaw-web--handle-post-chat request))
      ((and post-path (string= post-path "/api/reset"))
