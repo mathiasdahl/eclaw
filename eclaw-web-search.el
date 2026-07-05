@@ -325,7 +325,7 @@ Get a free key at https://jina.ai/?sui=apikey — required for `web_search'."
         (eclaw-web-search query max_results)
       "Error: web_search requires \"query\" in arguments."))
   (eclaw-deftool web_fetch
-    "Fetch and read the main text content of a specific URL."
+    "Fetch and read the main text content of a specific URL. Prefer web_search first, then fetch result URLs for detail."
     ((url :string "HTTP or HTTPS URL to fetch."))
     (if url
         (eclaw-web-fetch url)

@@ -51,9 +51,15 @@ run_smoke() {
     buffer-read)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/buffer-read.el"
       ;;
+    emacs-context)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/emacs-context.el"
+      ;;
+    describe-symbol)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/describe-symbol.el"
+      ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context, progress-timestamp, send-email, buffer-read" >&2
+      echo "Known: read-file, load, web-search, session-context, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol" >&2
       exit 2
       ;;
   esac

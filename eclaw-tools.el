@@ -43,6 +43,8 @@
 (declare-function eclaw-tool-message "eclaw" (tool-call-id content))
 
 (declare-function eclaw--folder "eclaw" ())
+(declare-function eclaw--emacs-started-at "eclaw" ())
+(declare-function help-function-arglist "help-fns" (function))
 
 (defvar eclaw-folder)
 
@@ -161,6 +163,25 @@ Ripgrep is preferred; when the chosen program is missing, the other is tried."
 
 (defconst eclaw-read-max-line-limit 1000
   "Hard cap on lines returned by `read_file'.")
+
+(defconst eclaw-emacs-context-default-max-buffers 20
+  "Default maximum buffers listed by `emacs_context'.")
+
+(defconst eclaw-emacs-context-max-buffers 100
+  "Hard cap on `emacs_context' max_buffers parameter.")
+
+(defconst eclaw-apropos-default-max-results 30
+  "Default maximum symbols returned by `apropos'.")
+
+(defconst eclaw-apropos-max-results 100
+  "Hard cap on `apropos' max_results parameter.")
+
+(defun eclaw--introspect-effective-cap (n default max)
+  "Return positive cap from optional integer N, else DEFAULT, capped at MAX."
+  (let ((lim (cond
+              ((and n (integerp n) (> n 0)) n)
+              (t default))))
+    (min lim max)))
 
 (defun eclaw--canonical-path (path)
   "Return `file-truename' of expanded PATH, or nil if resolution fails."
@@ -933,7 +954,7 @@ description instead of signaling."
         (error (format "Error reading file %S: %S" file err)))))))
 
 (eclaw-deftool read_file
-  "Read text from a file on disk. Optional offset/limit return a line range."
+  "Read text from a file on disk under `eclaw-folder'. Returns numbered lines (N|content). Optional offset/limit return a line range."
   ((path :string "File path (absolute or relative to `eclaw-folder').")
    (offset :integer
            "1-indexed start line. Negative counts from end (e.g. -1 = last line)."
@@ -987,7 +1008,7 @@ When `eclaw--buffer-sensitive-p' holds, return `eclaw--sensitive-buffer-msg'."
         (error (format "Error reading buffer %S: %S" (buffer-name buf) err)))))))
 
 (eclaw-deftool buffer_read
-  "Read text from a live Emacs buffer (including unsaved edits)."
+  "Read text from a live Emacs buffer (including unsaved edits). Same offset/limit line semantics as read_file. Not confined to `eclaw-folder'."
   ((buffer :string
            "Buffer name; omit, empty, or \"current\" for the current buffer."
            :optional)
@@ -998,6 +1019,291 @@ When `eclaw--buffer-sensitive-p' holds, return `eclaw--sensitive-buffer-msg'."
           "Maximum number of lines to return."
           :optional))
   (eclaw-tool-buffer-read buffer offset limit))
+
+(defun eclaw--emacs-context-current-section ()
+  "Return plain-text metadata for `(current-buffer)'."
+  (with-current-buffer (current-buffer)
+    (let* ((name (buffer-name))
+           (file (or (buffer-file-name) "(none)"))
+           (mode (symbol-name major-mode))
+           (modified (if (buffer-modified-p) "yes" "no"))
+           (pt (point))
+           (mk (mark))
+           (mark-str (if mk (number-to-string mk) "none"))
+           (region (if (region-active-p)
+                       (format "lines %d-%d"
+                               (line-number-at-pos (region-beginning))
+                               (line-number-at-pos (region-end)))
+                     "none")))
+      (concat "Current buffer:\n"
+              (format "  name: %s\n" name)
+              (format "  file: %s\n" file)
+              (format "  mode: %s\n" mode)
+              (format "  modified: %s\n" modified)
+              (format "  point: %d | mark: %s | region: %s\n"
+                      pt mark-str region)))))
+
+(defun eclaw--emacs-context-visible-buffers ()
+  "Return live, non-sensitive buffers sorted by name."
+  (sort (seq-filter (lambda (buf)
+                      (and (buffer-live-p buf)
+                           (not (eclaw--buffer-sensitive-p buf))))
+                    (buffer-list))
+        (lambda (a b) (string-lessp (buffer-name a) (buffer-name b)))))
+
+(defun eclaw--emacs-context-buffer-list-section (max-buffers)
+  "Return open-buffers listing section, capped by MAX-BUFFERS."
+  (let* ((visible (eclaw--emacs-context-visible-buffers))
+         (total (length visible))
+         (cap (eclaw--introspect-effective-cap max-buffers
+                                               eclaw-emacs-context-default-max-buffers
+                                               eclaw-emacs-context-max-buffers))
+         (truncated (> total cap))
+         (shown (if truncated (seq-take visible cap) visible)))
+    (concat
+     (format "Open buffers (%d, showing %d):\n" total (length shown))
+     (mapconcat
+      (lambda (buf)
+        (with-current-buffer buf
+          (format "  %s%s → %s"
+                  (if (buffer-modified-p) "[modified] " "")
+                  (buffer-name)
+                  (or (buffer-file-name) "(none)"))))
+      shown
+      "\n")
+     (when truncated
+       (format "\n[eclaw: listing truncated to %d entr%s]"
+               cap (if (= cap 1) "y" "ies"))))))
+
+(defun eclaw-tool-emacs-context (&optional max-buffers)
+  "Return Emacs session orientation metadata as plain text."
+  (let* ((started-at (condition-case nil
+                          (eclaw--emacs-started-at)
+                        (error (current-time))))
+         (session (format-time-string "%Y-%m-%d %H:%M" started-at)))
+    (concat
+     (format "Emacs %s (%s)\n" (emacs-version) system-configuration)
+     (format "Session started: %s\n\n" session)
+     (eclaw--emacs-context-current-section)
+     "\n"
+     (eclaw--emacs-context-buffer-list-section max-buffers))))
+
+(eclaw-deftool emacs_context
+  "Cheap Emacs session orientation before heavier introspection reads: version, current buffer metadata, open buffers."
+  ((max_buffers :integer
+                "Maximum open buffers to list (default 20, cap 100)."
+                :optional))
+  (eclaw-tool-emacs-context max_buffers))
+
+(defun eclaw--describe-symbol-normalize-name (name)
+  "Return trimmed symbol NAME without a leading colon."
+  (when name
+    (let ((trimmed (string-trim name)))
+      (if (string-prefix-p ":" trimmed)
+          (substring trimmed 1)
+        trimmed))))
+
+(defun eclaw--describe-symbol-normalize-kind (kind)
+  "Return normalized kind string, or nil when invalid."
+  (let ((k (downcase (or kind "auto"))))
+    (if (member k '("function" "variable" "command" "key" "auto"))
+        k
+      nil)))
+
+(defun eclaw--describe-symbol-doc (sym doc-type)
+  "Return documentation string for SYM using DOC-TYPE."
+  (pcase doc-type
+    ('function (documentation sym 'function))
+    ('variable (documentation-property sym 'variable-documentation))
+    ('property (documentation-property sym 'property-documentation))
+    (_ nil)))
+
+(defun eclaw--describe-symbol-arglist (sym)
+  "Return arglist string for function symbol SYM."
+  (condition-case nil
+      (when (fboundp 'help-function-arglist)
+        (let ((args (help-function-arglist sym)))
+          (when args (format "%S" args))))
+    (error nil)))
+
+(defun eclaw--describe-symbol-function-sections (sym include-interactive-p)
+  "Return list of formatted lines for function or command SYM."
+  (let (lines)
+    (when-let ((doc (eclaw--describe-symbol-doc sym 'function)))
+      (push (format "Documentation: %s" doc) lines))
+    (when-let ((args (eclaw--describe-symbol-arglist sym)))
+      (push (format "Arglist: %s" args) lines))
+    (when (and include-interactive-p
+               (interactive-form sym))
+      (push (format "Interactive: %S" (interactive-form sym)) lines))
+    (when-let ((file (symbol-file sym 'defun)))
+      (push (format "Defined in: %s" file) lines))
+    (nreverse lines)))
+
+(defun eclaw--describe-symbol-variable-sections (sym)
+  "Return list of formatted lines for variable SYM."
+  (let (lines)
+    (when-let ((doc (eclaw--describe-symbol-doc sym 'variable)))
+      (push (format "Documentation: %s" doc) lines))
+    (when-let ((ctype (get sym 'custom-type)))
+      (push (format "Custom type: %S" ctype) lines))
+    (when-let ((file (symbol-file sym 'defvar)))
+      (push (format "Defined in: %s" file) lines))
+    (nreverse lines)))
+
+(defun eclaw--describe-symbol-format (sym kind)
+  "Return describe_symbol output for SYM and resolved KIND string."
+  (let ((sections
+         (pcase kind
+           ("function"
+            (cons "Kind: function"
+                  (eclaw--describe-symbol-function-sections sym nil)))
+           ("command"
+            (cons "Kind: command"
+                  (eclaw--describe-symbol-function-sections sym t)))
+           ("variable"
+            (cons "Kind: variable"
+                  (eclaw--describe-symbol-variable-sections sym)))
+           (_ nil))))
+    (when sections
+      (concat (format "Symbol: %s\n" (symbol-name sym))
+              (string-join sections "\n")))))
+
+(defun eclaw--describe-symbol-auto-kind (sym)
+  "Return detected kind string for SYM, or nil."
+  (cond
+   ((fboundp sym) "function")
+   ((boundp sym) "variable")
+   (t nil)))
+
+(defun eclaw--describe-symbol-key (name)
+  "Return describe_symbol output for key sequence NAME."
+  (condition-case err
+      (let* ((binding (key-binding (kbd name)))
+             (cmd (when (and binding (not (eq binding 'ignore))
+                              (or (symbolp binding) (commandp binding)))
+                    binding)))
+        (if (null cmd)
+            (format "Error: describe_symbol: no binding for key %S" name)
+          (let* ((sym (when (symbolp cmd) cmd))
+                 (cmd-name (if (symbolp cmd) (symbol-name cmd) (format "%S" cmd)))
+                 (lines (list (format "Symbol: %s" name)
+                              "Kind: key"
+                              (format "Binding: %s" cmd-name))))
+            (when (and sym (fboundp sym))
+              (when-let ((doc (eclaw--describe-symbol-doc sym 'function)))
+                (push (format "Documentation: %s" doc) lines))
+              (when-let ((args (eclaw--describe-symbol-arglist sym)))
+                (push (format "Arglist: %s" args) lines))
+              (when (interactive-form sym)
+                (push (format "Interactive: %S" (interactive-form sym)) lines))
+              (when-let ((file (symbol-file sym 'defun)))
+                (push (format "Defined in: %s" file) lines)))
+            (string-join (nreverse lines) "\n"))))
+    (error (format "Error: describe_symbol: invalid key %S: %S" name err))))
+
+(defun eclaw-tool-describe-symbol (name &optional kind)
+  "Return documentation metadata for symbol NAME.
+Optional KIND is function, variable, command, key, or auto (default).
+Never returns `(symbol-value sym)'."
+  (let* ((norm-name (eclaw--describe-symbol-normalize-name name))
+         (norm-kind (eclaw--describe-symbol-normalize-kind kind)))
+    (cond
+     ((or (null norm-name) (string-empty-p norm-name))
+      "Error: describe_symbol requires \"name\" in arguments.")
+     ((null norm-kind)
+      (format "Error: describe_symbol: invalid kind %S (expected function, variable, command, key, or auto)."
+              kind))
+     ((string= norm-kind "key")
+      (eclaw--describe-symbol-key norm-name))
+     (t
+      (let ((sym (intern-soft norm-name)))
+        (cond
+         ((null sym)
+          (format "Error: describe_symbol: unknown symbol %S" norm-name))
+         ((string= norm-kind "auto")
+          (let ((detected (eclaw--describe-symbol-auto-kind sym)))
+            (if detected
+                (eclaw--describe-symbol-format sym detected)
+              (format "Error: describe_symbol: symbol %S is not a function or variable"
+                      norm-name))))
+         ((string= norm-kind "function")
+          (if (fboundp sym)
+              (eclaw--describe-symbol-format sym "function")
+            (format "Error: describe_symbol: %S is not a function" norm-name)))
+         ((string= norm-kind "command")
+          (if (commandp sym)
+              (eclaw--describe-symbol-format sym "command")
+            (format "Error: describe_symbol: %S is not a command" norm-name)))
+         ((string= norm-kind "variable")
+          (if (boundp sym)
+              (eclaw--describe-symbol-format sym "variable")
+            (format "Error: describe_symbol: %S is not a variable" norm-name)))
+         (t
+          (format "Error: describe_symbol: invalid kind %S" kind))))))))
+
+(eclaw-deftool describe_symbol
+  "Programmatic C-h f / C-h v / key lookup for an Emacs symbol. Returns documentation and arglist only; never returns variable values."
+  ((name :string "Symbol name (with or without leading colon).")
+   (kind :string
+         "One of function, variable, command, key, or auto (default auto)."
+         :optional))
+  (if name
+      (eclaw-tool-describe-symbol name kind)
+    "Error: describe_symbol requires \"name\" in arguments."))
+
+(defun eclaw--apropos-first-doc-line (sym)
+  "Return first documentation line for symbol SYM, or nil."
+  (let ((doc (or (documentation sym 'function)
+                 (documentation-property sym 'variable-documentation)
+                 (documentation-property sym 'property-documentation))))
+    (when doc
+      (car (split-string doc "\n" t)))))
+
+(defun eclaw-tool-apropos (pattern &optional max-results)
+  "Return symbol names and one-line docs matching regexp PATTERN."
+  (let ((pat (string-trim (or pattern ""))))
+    (cond
+     ((string-empty-p pat)
+      "Error: apropos requires non-empty \"pattern\" in arguments.")
+     (t
+      (condition-case err
+          (let* ((cap (eclaw--introspect-effective-cap max-results
+                                                      eclaw-apropos-default-max-results
+                                                      eclaw-apropos-max-results))
+                 (matches (apropos-internal pat))
+                 (sorted (sort matches
+                               (lambda (a b)
+                                 (string-lessp (symbol-name a) (symbol-name b)))))
+                 (with-doc
+                  (seq-filter (lambda (sym)
+                                (eclaw--apropos-first-doc-line sym))
+                              sorted))
+                 (total (length with-doc))
+                 (truncated (> total cap))
+                 (shown (if truncated (seq-take with-doc cap) with-doc)))
+            (concat
+             (mapconcat
+              (lambda (sym)
+                (format "%s — %s"
+                        (symbol-name sym)
+                        (eclaw--apropos-first-doc-line sym)))
+              shown
+              "\n")
+             (when truncated
+               (format "\n[eclaw: listing truncated to %d entr%s]"
+                       cap (if (= cap 1) "y" "ies")))))
+        (error (format "Error: apropos pattern %S: %S" pat err)))))))
+
+(eclaw-deftool apropos
+  "Search Emacs symbols by regexp; return names and one-line doc summaries only (no values)."
+  ((pattern :string "Regexp matched against symbol names (apropos-internal).")
+   (max_results :integer
+                "Maximum results to return (default 30, cap 100)."
+                :optional))
+  (if pattern
+      (eclaw-tool-apropos pattern max_results)
+    "Error: apropos requires \"pattern\" in arguments."))
 
 (defun eclaw-tool-list-directory (path max-entries include-hidden)
   "List up to MAX-ENTRIES entries in directory PATH.
@@ -1045,7 +1351,7 @@ dotfiles.  Return a multi-line string or an error description."
         (error (format "Error listing directory %S: %S" dir err)))))))
 
 (eclaw-deftool list_directory
-  "List files and subdirectories under a path (names + file/dir marker)."
+  "List files and subdirectories under a path (one level only; names + file/dir marker). Confined to `eclaw-folder'."
   ((path :string "Directory path (absolute or relative to `eclaw-folder').")
    (max_entries :integer
                 "Maximum entries to return (default 200 when omitted)."
@@ -1441,7 +1747,7 @@ PATH defaults to `eclaw-folder' when omitted."
         (error (format "Error during glob_files under %S: %S" root err)))))))
 
 (eclaw-deftool grep_files
-  "Search file contents under a path using ripgrep regex syntax."
+  "Search file contents under `eclaw-folder' using ripgrep regex syntax. Default output_mode files_with_matches; use content for line numbers then read_file with offset/limit. Escape regex metacharacters for literal text. Use include_ignored only when gitignored paths must be searched."
   ((path :string
          "File or directory to search (absolute or relative to `eclaw-folder'). Defaults to `eclaw-folder'."
          :optional)
@@ -1470,7 +1776,7 @@ PATH defaults to `eclaw-folder' when omitted."
     "Error: grep_files requires \"pattern\" in arguments."))
 
 (eclaw-deftool glob_files
-  "Find files under a directory whose paths match a glob pattern."
+  "Find files under `eclaw-folder' whose paths match a glob pattern. Prefer over list_directory for recursive name search."
   ((path :string
          "Directory root (absolute or relative to `eclaw-folder'). Defaults to `eclaw-folder'."
          :optional)
@@ -1502,7 +1808,7 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
     "Error: notes_write_text requires \"relative_path\" in arguments."))
 
 (eclaw-deftool skill_write
-  "Write `skills/<skill_dir>/SKILL.md` under `eclaw-folder' (UTF-8)."
+  "Write `skills/<skill_dir>/SKILL.md` under `eclaw-folder/skills/' (UTF-8). YAML frontmatter is added automatically."
   ((skill_dir :string
               "Single directory name under skills/ ([A-Za-z0-9_-], max 64 chars). Used as the skill `name' in frontmatter.")
    (description :string

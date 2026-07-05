@@ -44,7 +44,7 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - **Canonical execution trace:** `eclaw-conversation` holds user, assistant (with optional `tool_calls`), and tool messages—no system row
 - **Per-turn flow:** append user message → `eclaw-build-messages` → loop completions until plain assistant reply or a cap fires
 - **Message builders:** `eclaw-system-message`, `eclaw-user-message`, `eclaw-assistant-message`, `eclaw-tool-message`
-- **System prompt:** `eclaw-system-prompt` plus optional agent skills index block plus **session context block** (session-start date/time frozen for the chat session; see [`docs/session-context.md`](docs/session-context.md))
+- **System prompt:** `eclaw-system-prompt` (global persona and cross-cutting rules only) plus optional agent skills index block plus **session context block** (session-start date/time frozen for the chat session; see [`docs/session-context.md`](docs/session-context.md)). Per-tool purpose, constraints, and workflow live in `eclaw-deftool` descriptions (API `tools` array), not duplicated in the system prompt.
 - **Session start:** `eclaw--ensure-session-started` in `eclaw-chat` sets `eclaw--session-started` on first turn; cleared by `eclaw-reset-conversation`
 - **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`, `eclaw-save-conversation`, `eclaw-list-conversations`, `eclaw-open-conversation`
 
@@ -54,6 +54,7 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - Optional leading options in `eclaw-deftool`, e.g. `(:risk :write)`, before tool body
 - **Tool approval** (complete): **`eclaw-tool-approval-mode`** (`off` / `writes` / `all`; default **`all`**), interactive/batch gate, transcript lines in **`*eclaw*`**, persisted rules in **`<eclaw-folder>/tool-approval-rules.el`** (global and args-scoped keys; **`remember`** / **`remember-exact`**); maintenance: **`eclaw-list-tool-approval-rules`**, **`eclaw-remove-tool-approval-rule`**, **`eclaw-clear-tool-approval-rules`** — see [`docs/tool-approval.md`](docs/tool-approval.md)
 - Optional parameters via `:optional` in `eclaw-deftool`
+- **Tool descriptions:** each `eclaw-deftool` top-level description carries per-tool guidance sent in the API `tools` array; avoid duplicating that text in `eclaw-system-prompt`
 - Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages` (**`eclaw-tools.el`**)
 - Multi-tool per turn; multi-round loop in `eclaw-chat`
 - Toggle tools in requests: `eclaw-tools-enabled`
@@ -65,6 +66,9 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 |------|------|-------------------|
 | `read_file` | Read file text with optional `offset`/`limit` line range; sensitive-path policy; default 250-line cap | `:read` |
 | `buffer_read` | Read live Emacs buffer text (unsaved content); optional `offset`/`limit`; buffer deny list + sensitive file policy | `:read` |
+| `emacs_context` | Session orientation: Emacs version, current buffer metadata, open buffer list; sensitive buffers omitted from listing | `:read` |
+| `describe_symbol` | Programmatic `C-h f` / `C-h v` / key lookup; documentation and arglist only (no variable values) | `:read` |
+| `apropos` | Search symbols by regexp; one-line doc summaries only (no values) | `:read` |
 | `list_directory` | Bounded directory listing (one level; not a glob search) | `:read` |
 | `grep_files` | Content search — ripgrep regex; default `files_with_matches`; gitignore-aware | `:read` |
 | `glob_files` | Find files by glob pattern (ripgrep `--files`; mtime-sorted) | `:read` |
@@ -104,6 +108,15 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - Optional **`offset`** (1-indexed start line; negative counts from EOF) and **`limit`** (max lines)
 - Output prefixes each line with its line number (`123|content`); `[eclaw: line limit N reached]` when truncated
 - **Config:** `eclaw-read-default-line-limit` (250), `eclaw-read-max-line-limit` (1000) in **`eclaw-tools.el`**
+
+## Emacs introspection tools (Milestone 1e — done)
+
+- **`buffer_read`:** read live buffer text (unsaved); optional `offset`/`limit`; numbered lines; `eclaw-sensitive-buffer-name-regexp-list` + `eclaw--buffer-sensitive-p` deny policy
+- **`emacs_context`:** cheap session orientation — Emacs version, session start time, current buffer metadata (name, file, mode, modified, point/mark/region), open buffer list; sensitive buffers omitted from listing; optional `max_buffers` (default 20, cap 100)
+- **`describe_symbol`:** programmatic help — `name` + optional `kind` (`function`, `variable`, `command`, `key`, `auto`); documentation, arglist, interactive form, custom type, source file; **never returns variable values**
+- **`apropos`:** `(apropos-internal pattern)` with one-line doc summaries; optional `max_results` (default 30, cap 100)
+- **Handlers:** `;;; Emacs introspection` section in **`eclaw-tools.el`**; shared cap helper `eclaw--introspect-effective-cap`
+- **Smoke:** `scripts/smoke/buffer-read.el`, `scripts/smoke/emacs-context.el`, `scripts/smoke/describe-symbol.el` — wired in `scripts/eclaw-validate-elisp.sh`
 
 ## Agent skills (Milestone 1b — done)
 
@@ -320,9 +333,9 @@ Or bind conversation per buffer or per `eclaw-folder`. Goals: multiple simultane
 
 Bounded `write_file` / patch tool under the same path discipline as `notes_write_text`—not started; higher risk than read-only tools.
 
-### 4. Emacs introspection tools (read-only) — Milestone 1e
+### 4. Emacs introspection tools (read-only) — Milestone 1e ✓
 
-**Status:** in progress (`buffer_read` done; `emacs_context`, `describe_symbol` pending). Canonical spec for read-only tools that introspect the live Emacs session. Historical brainstorming lives in [`notes/tool-discussion.txt`](notes/tool-discussion.txt); implement from this section.
+**Status:** done (`buffer_read`, `emacs_context`, `describe_symbol`, `apropos`). Implemented bullets moved to **Current Features** above. Canonical spec below for reference. Historical brainstorming lives in [`notes/tool-discussion.txt`](notes/tool-discussion.txt).
 
 #### Motivation
 
@@ -348,7 +361,7 @@ Reuse patterns from existing tools (`eclaw-deftool`, `eclaw-tool-read-file`, `ec
 | Truncation footer | `[eclaw: line limit N reached]` / `[eclaw: listing truncated to N entries]` |
 | Handler location | New `;;; Emacs introspection` section in **`eclaw-tools.el`** initially; split to **`eclaw-introspect.el`** only if the section grows large |
 | Helpers | Factor shared line-range logic from `eclaw--read-*` rather than duplicating |
-| System prompt | After each tool ships, extend `eclaw-system-prompt` in **`eclaw.el`** with one sentence per tool |
+| System prompt | Global rules only in `eclaw-system-prompt` (`eclaw.el`); per-tool guidance in `eclaw-deftool` descriptions |
 
 #### Tool 1: `buffer_read` ✓ (implement first)
 
@@ -377,7 +390,7 @@ Reuse patterns from existing tools (`eclaw-deftool`, `eclaw-tool-read-file`, `ec
 
 **Smoke test:** `scripts/smoke/buffer-read.el` — temp buffers; test current/named buffer, offset/limit, negative offset, missing buffer, blocked buffer name. Wire into `scripts/eclaw-validate-elisp.sh` as `--smoke buffer-read`.
 
-#### Tool 2: `emacs_context` (implement second)
+#### Tool 2: `emacs_context` ✓
 
 **Purpose:** Cheap session orientation before heavier reads.
 
@@ -405,7 +418,7 @@ Open buffers (TOTAL, showing N):
 
 **Safety:** Metadata only — no buffer contents. Apply the same buffer-name deny list when listing; omit or redact entries for sensitive buffers.
 
-#### Tool 3: `describe_symbol` (implement third)
+#### Tool 3: `describe_symbol` ✓
 
 **Purpose:** Programmatic `C-h f` / `C-h v` / `C-h k` for the model.
 
@@ -427,7 +440,7 @@ Open buffers (TOTAL, showing N):
 
 **`kind` = `key`:** resolve via `kbd` / `key-binding`; document as best-effort.
 
-**Optional companion (v1.1): `apropos`**
+**Companion: `apropos` ✓**
 
 | Param | Type | Notes |
 |-------|------|-------|
@@ -453,18 +466,20 @@ See also [`notes/tool-discussion.txt`](notes/tool-discussion.txt).
 1. ✓ Add `eclaw--buffer-sensitive-p` helper + `defcustom` deny regexp list.
 2. ✓ Implement `eclaw-tool-buffer-read` + `eclaw-deftool buffer_read`.
 3. ✓ Smoke test + byte-compile (`scripts/smoke/buffer-read.el`; `--smoke buffer-read`).
-4. Implement `eclaw-tool-emacs-context` + tool registration.
-5. Implement `eclaw-tool-describe-symbol` (+ optional `apropos`).
-6. Extend `eclaw-system-prompt` once tools register. (`buffer_read` sentence added.)
-7. Update **Registered tools** table at top of this file (**Current Features**). (`buffer_read` added.)
-8. Mark Milestone 1e done; move implemented bullets from this section to **Current Features**.
+4. ✓ Implement `eclaw-tool-emacs-context` + tool registration.
+5. ✓ Implement `eclaw-tool-describe-symbol` + `eclaw-tool-apropos`.
+6. ✓ Per-tool guidance in `eclaw-deftool` descriptions (not duplicated in system prompt).
+7. ✓ Update **Registered tools** table at top of this file (**Current Features**).
+8. ✓ Mark Milestone 1e done; move implemented bullets from this section to **Current Features**.
 
 **Verification:**
 
 ```bash
 scripts/eclaw-validate-elisp.sh --compile
 scripts/eclaw-validate-elisp.sh --require
-scripts/eclaw-validate-elisp.sh --smoke buffer-read   # after smoke script exists
+scripts/eclaw-validate-elisp.sh --smoke buffer-read
+scripts/eclaw-validate-elisp.sh --smoke emacs-context
+scripts/eclaw-validate-elisp.sh --smoke describe-symbol
 ```
 
 Interactive: `M-x eclaw-agent-chat` with prompts like “what buffer am I in?” and “describe the symbol `eclaw-deftool`”.
