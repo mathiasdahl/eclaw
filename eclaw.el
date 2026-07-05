@@ -142,7 +142,9 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "(skill_dir uses only letters, digits, hyphen, underscore; max length 64; pass "
    "description for the index and content as the markdown body — frontmatter is added "
    "automatically). "
-   "Both write tools store data only under `eclaw-folder'."
+   "Both write tools store data only under `eclaw-folder'. "
+   "To inspect the live Emacs session (buffers, not disk files), use "
+   "`buffer_read' with optional `offset'/`limit' (same line semantics as `read_file'). "
    "When asked for a plan/proposal/options first, present it and wait for explicit approval before acting.")
   "Text of the system role message prepended to every completion request.")
 

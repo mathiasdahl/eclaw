@@ -116,9 +116,20 @@ Compared via `file-truename' after `expand-file-name'."
   :type '(repeat string)
   :group 'eclaw)
 
+(defcustom eclaw-sensitive-buffer-name-regexp-list
+  '("^\\*auth\\*" "^\\*passwd\\*" "^epa-" "^\\*sudo\\*")
+  "Buffer name regexps blocked for Emacs introspection tools.
+A buffer is blocked when `(buffer-name buffer)' matches any entry."
+  :type '(repeat string)
+  :group 'eclaw)
+
 (defconst eclaw--sensitive-path-msg
   "Error: access denied (eclaw sensitive path policy)."
   "Constant denial message returned to the model for blocked paths.")
+
+(defconst eclaw--sensitive-buffer-msg
+  "Error: access denied (eclaw sensitive buffer policy)."
+  "Constant denial message returned to the model for blocked buffers.")
 
 (defcustom eclaw-grep-program "rg"
   "External program for `glob_files' and `grep_files': ripgrep (\"rg\") or GNU grep (\"grep\").
@@ -178,6 +189,18 @@ Ripgrep is preferred; when the chosen program is missing, the other is tried."
         (when-let ((cf (eclaw--canonical-path f)))
           (when (string-equal canon cf)
             (throw 'eclaw-sensitive t))))
+      nil)))
+
+(defun eclaw--buffer-sensitive-p (buffer)
+  "Non-nil when BUFFER must not be read by introspection tools."
+  (when (buffer-live-p buffer)
+    (catch 'eclaw-sensitive-buffer
+      (dolist (re eclaw-sensitive-buffer-name-regexp-list)
+        (when (string-match-p re (buffer-name buffer))
+          (throw 'eclaw-sensitive-buffer t)))
+      (when-let ((file (buffer-file-name buffer)))
+        (when (eclaw--path-sensitive-p file)
+          (throw 'eclaw-sensitive-buffer t)))
       nil)))
 
 (defun eclaw--invalidate-skills-cache ()
@@ -810,16 +833,19 @@ to nil for text-only requests."
 
 ;;; Tool execution
 
+(defun eclaw--read-split-lines-from-string (text)
+  "Split TEXT into line strings (no trailing newlines)."
+  (if (string-empty-p text)
+      nil
+    (mapcar (lambda (line)
+              (replace-regexp-in-string "\\`\r\\'" "" line))
+            (split-string text "\n"))))
+
 (defun eclaw--read-split-lines (file)
   "Read FILE literally and return a list of line strings (no trailing newlines)."
   (with-temp-buffer
     (insert-file-contents-literally file)
-    (let ((text (buffer-string)))
-      (if (string-empty-p text)
-          nil
-        (mapcar (lambda (line)
-                  (replace-regexp-in-string "\\`\r\\'" "" line))
-                (split-string text "\n"))))))
+    (eclaw--read-split-lines-from-string (buffer-string))))
 
 (defun eclaw--read-effective-line-limit (limit)
   "Return positive line limit from LIMIT, default, or hard cap."
@@ -853,6 +879,39 @@ to nil for text-only requests."
                   (format "\n[eclaw: line limit %d reached]" line-limit))
         body))))
 
+(defun eclaw--read-format-line-range (all-lines offset limit tool-name)
+  "Return numbered line slice from ALL-LINES using OFFSET/LIMIT semantics.
+TOOL-NAME appears in error strings (e.g. \"read_file\", \"buffer_read\")."
+  (cond
+   ((and limit (not (integerp limit)))
+    (format "Error: %s limit must be an integer." tool-name))
+   ((and limit (<= limit 0))
+    (format "Error: %s limit must be a positive integer." tool-name))
+   ((and offset (not (integerp offset)))
+    (format "Error: %s offset must be an integer." tool-name))
+   ((and offset (= offset 0))
+    (format "Error: %s offset must be >= 1 or negative (counts from end)." tool-name))
+   (t
+    (let* ((total (length all-lines))
+           (start (eclaw--read-resolve-start-line offset total))
+           (line-limit (eclaw--read-effective-line-limit limit))
+           (end (min total (+ start line-limit -1)))
+           (truncated-p (or (and limit (> limit eclaw-read-max-line-limit))
+                            (and (null limit) (< end total)))))
+      (cond
+       ((null start)
+        (format "Error: %s offset must be >= 1 or negative (counts from end)."
+                tool-name))
+       ((and (> start 0) (> start total))
+        (format "Error: %s offset %d beyond end (%d lines)"
+                tool-name start total))
+       ((zerop total)
+        "")
+       (t
+        (eclaw--read-format-lines
+         (seq-subseq all-lines (1- start) end)
+         start end truncated-p line-limit)))))))
+
 (defun eclaw-tool-read-file (path &optional offset limit)
   "Read the file at PATH and return numbered lines as a string.
 Optional OFFSET is a 1-indexed start line (negative counts from EOF).
@@ -867,38 +926,11 @@ description instead of signaling."
      (resolve-err resolve-err)
      ((eclaw--path-sensitive-p file)
       eclaw--sensitive-path-msg)
-     ((and limit (not (integerp limit)))
-      "Error: read_file limit must be an integer.")
-     ((and limit (<= limit 0))
-      "Error: read_file limit must be a positive integer.")
-     ((and offset (not (integerp offset)))
-      "Error: read_file offset must be an integer.")
-     ((and offset (= offset 0))
-      "Error: read_file offset must be >= 1 or negative (counts from end).")
      (t
       (condition-case err
-          (let* ((all-lines (eclaw--read-split-lines file))
-                 (total (length all-lines))
-                 (start (eclaw--read-resolve-start-line offset total))
-                 (line-limit (eclaw--read-effective-line-limit limit))
-                 (end (min total (+ start line-limit -1)))
-                 (truncated-p (or (and limit (> limit eclaw-read-max-line-limit))
-                                  (and (null limit) (< end total)))))
-            (cond
-             ((null start)
-              "Error: read_file offset must be >= 1 or negative (counts from end).")
-             ((and (> start 0) (> start total))
-              (format "Error: read_file offset %d beyond end of file (%d lines)"
-                      start total))
-             ((zerop total)
-              "")
-             (t
-              (eclaw--read-format-lines
-               (seq-subseq all-lines (1- start) end)
-               start end truncated-p line-limit))))
+          (eclaw--read-format-line-range
+           (eclaw--read-split-lines file) offset limit "read_file")
         (error (format "Error reading file %S: %S" file err)))))))
-
-
 
 (eclaw-deftool read_file
   "Read text from a file on disk. Optional offset/limit return a line range."
@@ -920,6 +952,52 @@ description instead of signaling."
                                  file)))
         (eclaw-tool-read-file path offset limit))
     "Error: read_file requires \"path\" in arguments."))
+
+;;; Emacs introspection
+
+(defun eclaw--buffer-read-resolve-buffer (name)
+  "Return live buffer for optional NAME string, or nil when not found."
+  (cond
+   ((or (null name) (string-empty-p name) (string-equal name "current"))
+    (current-buffer))
+   (t
+    (get-buffer name))))
+
+(defun eclaw-tool-buffer-read (&optional buffer-name offset limit)
+  "Read text from live BUFFER-NAME and return numbered lines as a string.
+When BUFFER-NAME is nil, empty, or \"current\", use `(current-buffer)'.
+Optional OFFSET and LIMIT follow the same semantics as `read_file'.
+When `eclaw--buffer-sensitive-p' holds, return `eclaw--sensitive-buffer-msg'."
+  (let ((buf (eclaw--buffer-read-resolve-buffer buffer-name)))
+    (cond
+     ((not (buffer-live-p buf))
+      (format "Error: buffer_read: no live buffer %S"
+              (if (or (null buffer-name) (string-empty-p buffer-name))
+                  "current"
+                buffer-name)))
+     ((eclaw--buffer-sensitive-p buf)
+      eclaw--sensitive-buffer-msg)
+     (t
+      (condition-case err
+          (with-current-buffer buf
+            (eclaw--read-format-line-range
+             (eclaw--read-split-lines-from-string
+              (substring-no-properties (buffer-string)))
+             offset limit "buffer_read"))
+        (error (format "Error reading buffer %S: %S" (buffer-name buf) err)))))))
+
+(eclaw-deftool buffer_read
+  "Read text from a live Emacs buffer (including unsaved edits)."
+  ((buffer :string
+           "Buffer name; omit, empty, or \"current\" for the current buffer."
+           :optional)
+   (offset :integer
+           "1-indexed start line. Negative counts from end (e.g. -1 = last line)."
+           :optional)
+   (limit :integer
+          "Maximum number of lines to return."
+          :optional))
+  (eclaw-tool-buffer-read buffer offset limit))
 
 (defun eclaw-tool-list-directory (path max-entries include-hidden)
   "List up to MAX-ENTRIES entries in directory PATH.
