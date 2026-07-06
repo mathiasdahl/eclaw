@@ -137,7 +137,9 @@ from a scratch buffer with a surprising `default-directory')."
   (let ((json-object-type 'alist)
         (json-array-type 'list)
         (json-key-type 'string))
-    (ws-response-header process status '("Content-type" . "application/json"))
+    (ws-response-header process status
+                        '(("Content-type" . "application/json")
+                          ("Cache-Control" . "no-store")))
     (process-send-string process (json-encode alist))))
 
 (defun eclaw-web--parse-json-body (body)
@@ -225,7 +227,7 @@ from a scratch buffer with a surprising `default-directory')."
      `(("name" . ,(plist-get row 'name))
        ("description" . ,(plist-get row 'description))
        ("risk" . ,(plist-get row 'risk))
-       ("enabled" . ,(plist-get row 'enabled))))
+       ("enabled" . ,(if (plist-get row 'enabled) t :json-false))))
    (eclaw-tool-policy-list)))
 
 (defun eclaw-web--settings-response-alist ()

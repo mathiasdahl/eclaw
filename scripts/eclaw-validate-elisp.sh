@@ -60,9 +60,12 @@ run_smoke() {
     eval-elisp)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/eval-elisp.el"
       ;;
+    web-settings-json)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/web-settings-json.el"
+      ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp" >&2
+      echo "Known: read-file, load, web-search, session-context, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json" >&2
       exit 2
       ;;
   esac

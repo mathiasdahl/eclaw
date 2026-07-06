@@ -910,66 +910,112 @@
     function settingsDraftFromTools(tools) {
       const draft = {};
       for (const tool of tools) {
-        draft[tool.name] = !!tool.enabled;
+        if (tool && tool.name) {
+          draft[tool.name] = !!tool.enabled;
+        }
       }
       return draft;
     }
 
+    function normalizeTools(data) {
+      const tools = data && data.tools;
+      if (Array.isArray(tools)) {
+        return { tools, error: null };
+      }
+      if (tools && typeof tools === "object") {
+        return {
+          tools: [],
+          error: "Unexpected tools format from server (expected JSON array). Restart eclaw-web and hard-refresh the page.",
+        };
+      }
+      return { tools: [], error: null };
+    }
+
+    function settingsRiskOrder(grouped) {
+      const known = SETTINGS_GROUP_ORDER.filter((risk) => (grouped[risk] || []).length > 0);
+      const unknown = Object.keys(grouped)
+        .filter((risk) => !SETTINGS_GROUP_ORDER.includes(risk) && grouped[risk].length > 0)
+        .sort();
+      return known.concat(unknown);
+    }
+
+    function appendSettingsGroup(risk, items) {
+      const section = document.createElement("div");
+      section.className = "settings-group";
+      const heading = document.createElement("h3");
+      heading.textContent = SETTINGS_GROUP_LABELS[risk] || risk;
+      section.appendChild(heading);
+      let rowCount = 0;
+      for (const tool of items) {
+        if (!tool || !tool.name) continue;
+        rowCount += 1;
+        const row = document.createElement("div");
+        row.className = "settings-tool" + (risk === "dangerous" ? " dangerous" : "");
+        const label = document.createElement("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = !!settingsDraft[tool.name];
+        checkbox.dataset.toolName = tool.name;
+        checkbox.dataset.risk = risk;
+        checkbox.addEventListener("change", () => {
+          const name = checkbox.dataset.toolName;
+          const wasEnabled = settingsDraft[name];
+          const nextEnabled = checkbox.checked;
+          if (checkbox.dataset.risk === "dangerous" && nextEnabled && !wasEnabled) {
+            const ok = window.confirm(
+              `Enable "${name}"?\n\nThis tool can run arbitrary Elisp in your Emacs session, including modifying eclaw itself. Only continue on a trusted localhost session.`
+            );
+            if (!ok) {
+              checkbox.checked = false;
+              return;
+            }
+          }
+          settingsDraft[name] = nextEnabled;
+        });
+        label.appendChild(checkbox);
+        const text = document.createElement("span");
+        const nameEl = document.createElement("span");
+        nameEl.className = "settings-tool-name";
+        nameEl.textContent = tool.name;
+        const descEl = document.createElement("span");
+        descEl.className = "settings-tool-desc";
+        descEl.textContent = tool.description || "";
+        text.appendChild(nameEl);
+        text.appendChild(descEl);
+        label.appendChild(text);
+        row.appendChild(label);
+        section.appendChild(row);
+      }
+      if (rowCount > 0) {
+        settingsGroupsEl.appendChild(section);
+      }
+      return rowCount;
+    }
+
     function renderSettingsGroups(tools) {
+      if (!settingsGroupsEl) {
+        if (settingsStatusEl) {
+          settingsStatusEl.textContent = "Settings panel is missing from the page.";
+        }
+        return;
+      }
       settingsGroupsEl.innerHTML = "";
       const grouped = Object.fromEntries(SETTINGS_GROUP_ORDER.map((risk) => [risk, []]));
       for (const tool of tools) {
+        if (!tool || typeof tool !== "object") continue;
         const risk = tool.risk || "read";
         if (!grouped[risk]) grouped[risk] = [];
         grouped[risk].push(tool);
       }
-      for (const risk of SETTINGS_GROUP_ORDER) {
-        const items = grouped[risk] || [];
-        if (items.length === 0) continue;
-        const section = document.createElement("div");
-        section.className = "settings-group";
-        const heading = document.createElement("h3");
-        heading.textContent = SETTINGS_GROUP_LABELS[risk] || risk;
-        section.appendChild(heading);
-        for (const tool of items) {
-          const row = document.createElement("div");
-          row.className = "settings-tool" + (risk === "dangerous" ? " dangerous" : "");
-          const label = document.createElement("label");
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.checked = !!settingsDraft[tool.name];
-          checkbox.dataset.toolName = tool.name;
-          checkbox.dataset.risk = risk;
-          checkbox.addEventListener("change", () => {
-            const name = checkbox.dataset.toolName;
-            const wasEnabled = settingsDraft[name];
-            const nextEnabled = checkbox.checked;
-            if (checkbox.dataset.risk === "dangerous" && nextEnabled && !wasEnabled) {
-              const ok = window.confirm(
-                `Enable "${name}"?\n\nThis tool can run arbitrary Elisp in your Emacs session, including modifying eclaw itself. Only continue on a trusted localhost session.`
-              );
-              if (!ok) {
-                checkbox.checked = false;
-                return;
-              }
-            }
-            settingsDraft[name] = nextEnabled;
-          });
-          label.appendChild(checkbox);
-          const text = document.createElement("span");
-          const nameEl = document.createElement("span");
-          nameEl.className = "settings-tool-name";
-          nameEl.textContent = tool.name;
-          const descEl = document.createElement("span");
-          descEl.className = "settings-tool-desc";
-          descEl.textContent = tool.description || "";
-          text.appendChild(nameEl);
-          text.appendChild(descEl);
-          label.appendChild(text);
-          row.appendChild(label);
-          section.appendChild(row);
-        }
-        settingsGroupsEl.appendChild(section);
+      let rowCount = 0;
+      for (const risk of settingsRiskOrder(grouped)) {
+        rowCount += appendSettingsGroup(risk, grouped[risk] || []);
+      }
+      if (tools.length === 0) {
+        settingsStatusEl.textContent = "No tools registered.";
+      } else if (rowCount === 0) {
+        settingsStatusEl.textContent =
+          `Received ${tools.length} tool(s) but none could be displayed. Check risk values and the browser console.`;
       }
     }
 
@@ -977,16 +1023,24 @@
       if (settingsLoaded && !force) return;
       settingsStatusEl.textContent = "Loading…";
       try {
-        const res = await fetch("api/settings");
+        const res = await fetch("api/settings", { cache: "no-store" });
         const data = await res.json();
         if (!res.ok) {
           settingsStatusEl.textContent = data.error || "Failed to load settings";
           return;
         }
-        settingsDraft = settingsDraftFromTools(Array.isArray(data.tools) ? data.tools : []);
-        renderSettingsGroups(Array.isArray(data.tools) ? data.tools : []);
+        const { tools, error } = normalizeTools(data);
+        if (error) {
+          settingsGroupsEl.innerHTML = "";
+          settingsStatusEl.textContent = error;
+          return;
+        }
+        settingsDraft = settingsDraftFromTools(tools);
+        renderSettingsGroups(tools);
         settingsLoaded = true;
-        settingsStatusEl.textContent = "";
+        if (tools.length > 0 && settingsGroupsEl.childElementCount > 0) {
+          settingsStatusEl.textContent = "";
+        }
       } catch (err) {
         settingsStatusEl.textContent = String(err);
       }
@@ -998,6 +1052,7 @@
         const res = await fetch("api/settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
+          cache: "no-store",
           body: JSON.stringify({ tools: settingsDraft }),
         });
         let data;
@@ -1010,8 +1065,14 @@
           settingsStatusEl.textContent = data.error || "Save failed";
           return;
         }
-        settingsDraft = settingsDraftFromTools(Array.isArray(data.tools) ? data.tools : []);
-        renderSettingsGroups(Array.isArray(data.tools) ? data.tools : []);
+        const { tools, error } = normalizeTools(data);
+        if (error) {
+          settingsGroupsEl.innerHTML = "";
+          settingsStatusEl.textContent = error;
+          return;
+        }
+        settingsDraft = settingsDraftFromTools(tools);
+        renderSettingsGroups(tools);
         settingsStatusEl.textContent = "Saved.";
       } catch (err) {
         settingsStatusEl.textContent = String(err);
