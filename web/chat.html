@@ -512,9 +512,9 @@
       margin: 0 0 0.75rem;
       padding: 0.5rem 0.65rem;
       border-radius: var(--radius-sm);
-      border: 1px solid var(--msg-error-border);
-      background: var(--msg-error-bg);
-      color: var(--msg-error-text);
+      border: 1px solid var(--border-strong);
+      background: var(--msg-assistant-bg);
+      color: var(--text-dim);
       font-size: 0.85rem;
     }
 
@@ -579,6 +579,10 @@
     #settings-status {
       font-size: 0.85rem;
       color: var(--text-dim);
+    }
+
+    #settings-status.is-error {
+      color: var(--msg-error-text);
     }
 
     @keyframes glitchFlicker {
@@ -651,6 +655,7 @@
     const usageStatsEl = document.getElementById("usage-stats");
     const rainCanvas = document.getElementById("matrix-rain");
     const THEME_KEY = "eclaw-theme";
+    const ECLAW_WEB_BASE = "";
 
     const COPY = {
       default: {
@@ -694,6 +699,52 @@
       return value.toLocaleString();
     }
 
+    function webBaseHref() {
+      if (ECLAW_WEB_BASE) {
+        const base = ECLAW_WEB_BASE.startsWith("/") ? ECLAW_WEB_BASE : `/${ECLAW_WEB_BASE}`;
+        return new URL(base.endsWith("/") ? base : `${base}/`, window.location.origin).href;
+      }
+      return new URL("./", window.location.href).href;
+    }
+
+    function apiUrl(path) {
+      const rel = path.startsWith("/") ? path.slice(1) : path;
+      return new URL(rel, webBaseHref()).href;
+    }
+
+    async function readJsonResponse(res) {
+      const contentType = res.headers.get("content-type") || "";
+      const text = await res.text();
+      if (!contentType.includes("application/json")) {
+        const preview = text.trimStart().slice(0, 60);
+        if (preview.startsWith("<!DOCTYPE") || preview.startsWith("<html")) {
+          throw new Error(
+            "Server returned HTML instead of JSON. Set eclaw-web-base-path (for example \"/muuclaw\") and restart eclaw-web."
+          );
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${text.trim().slice(0, 120) || res.statusText}`);
+        }
+        throw new Error(`Expected JSON but got ${contentType || "non-JSON response"}`);
+      }
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        throw new Error(`Invalid JSON response: ${err.message}`);
+      }
+      if (!res.ok) {
+        throw new Error((data && data.error) || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function apiFetch(path, options = {}) {
+      const res = await fetch(apiUrl(path), { cache: "no-store", ...options });
+      const data = await readJsonResponse(res);
+      return { res, data };
+    }
+
     function usageLine(label, usage) {
       const prompt = usage && usage.prompt_tokens != null ? usage.prompt_tokens : 0;
       const completion = usage && usage.completion_tokens != null ? usage.completion_tokens : 0;
@@ -716,23 +767,17 @@
 
     async function fetchStats() {
       try {
-        const res = await fetch("api/stats");
-        if (!res.ok) return;
-        const data = await res.json();
+        const { data } = await apiFetch("api/stats");
         renderUsageStats(data);
-      } catch (_err) {
-        /* non-fatal */
+      } catch (err) {
+        console.debug("eclaw: stats unavailable:", err.message);
       }
     }
 
-    async function loadSession() {
+    async function loadSession(options) {
+      const quiet = options && options.quiet;
       try {
-        const res = await fetch("api/conversation");
-        const data = await res.json();
-        if (!res.ok) {
-          addMessage(data.error || "Failed to load session", "error");
-          return;
-        }
+        const { data } = await apiFetch("api/conversation");
         messagesEl.innerHTML = "";
         if (Array.isArray(data.messages)) {
           for (const msg of data.messages) {
@@ -743,7 +788,11 @@
         }
         if (data.usage) renderUsageStats(data.usage);
       } catch (err) {
-        addMessage(String(err), "error");
+        if (quiet) {
+          console.debug("eclaw: session load skipped:", err.message);
+        } else {
+          addMessage(String(err), "error");
+        }
       }
     }
 
@@ -917,12 +966,55 @@
       return draft;
     }
 
+    function setSettingsStatus(message, isError) {
+      if (!settingsStatusEl) return;
+      settingsStatusEl.textContent = message || "";
+      settingsStatusEl.classList.toggle("is-error", !!isError);
+    }
+
+    function parseToolEntry(entry) {
+      if (!entry || typeof entry !== "object") return null;
+      if (!Array.isArray(entry)) {
+        if (typeof entry.name === "string" && entry.name) return entry;
+        return null;
+      }
+      const obj = {};
+      for (let i = 0; i + 1 < entry.length; i += 2) {
+        if (typeof entry[i] === "string") obj[entry[i]] = entry[i + 1];
+      }
+      return typeof obj.name === "string" && obj.name ? obj : null;
+    }
+
     function normalizeTools(data) {
-      const tools = data && data.tools;
-      if (Array.isArray(tools)) {
+      const raw = data && data.tools;
+      if (Array.isArray(raw)) {
+        const tools = raw.map(parseToolEntry).filter(Boolean);
+        if (raw.length > 0 && tools.length === 0) {
+          return {
+            tools: [],
+            error: "Could not parse tool entries from server response.",
+          };
+        }
         return { tools, error: null };
       }
-      if (tools && typeof tools === "object") {
+      if (raw && typeof raw === "object") {
+        const entries = Object.entries(raw);
+        if (
+          entries.length > 0 &&
+          entries.every(
+            ([name, enabled]) => typeof name === "string" && typeof enabled === "boolean"
+          )
+        ) {
+          return {
+            tools: entries.map(([name, enabled]) => ({
+              name,
+              description: "",
+              risk: "read",
+              enabled,
+            })),
+            error: null,
+          };
+        }
         return {
           tools: [],
           error: "Unexpected tools format from server (expected JSON array). Restart eclaw-web and hard-refresh the page.",
@@ -994,10 +1086,8 @@
 
     function renderSettingsGroups(tools) {
       if (!settingsGroupsEl) {
-        if (settingsStatusEl) {
-          settingsStatusEl.textContent = "Settings panel is missing from the page.";
-        }
-        return;
+        setSettingsStatus("Settings panel is missing from the page.", true);
+        return false;
       }
       settingsGroupsEl.innerHTML = "";
       const grouped = Object.fromEntries(SETTINGS_GROUP_ORDER.map((risk) => [risk, []]));
@@ -1012,70 +1102,59 @@
         rowCount += appendSettingsGroup(risk, grouped[risk] || []);
       }
       if (tools.length === 0) {
-        settingsStatusEl.textContent = "No tools registered.";
-      } else if (rowCount === 0) {
-        settingsStatusEl.textContent =
-          `Received ${tools.length} tool(s) but none could be displayed. Check risk values and the browser console.`;
+        setSettingsStatus("No tools registered.", true);
+        return false;
       }
+      if (rowCount === 0) {
+        setSettingsStatus(
+          `Received ${tools.length} tool(s) but none could be displayed. Check risk values and the browser console.`,
+          true
+        );
+        return false;
+      }
+      setSettingsStatus("", false);
+      return true;
     }
 
     async function loadSettings(force) {
       if (settingsLoaded && !force) return;
-      settingsStatusEl.textContent = "Loading…";
+      setSettingsStatus("Loading…", false);
       try {
-        const res = await fetch("api/settings", { cache: "no-store" });
-        const data = await res.json();
-        if (!res.ok) {
-          settingsStatusEl.textContent = data.error || "Failed to load settings";
-          return;
-        }
+        const { data } = await apiFetch("api/settings");
         const { tools, error } = normalizeTools(data);
         if (error) {
-          settingsGroupsEl.innerHTML = "";
-          settingsStatusEl.textContent = error;
+          if (settingsGroupsEl) settingsGroupsEl.innerHTML = "";
+          setSettingsStatus(error, true);
           return;
         }
         settingsDraft = settingsDraftFromTools(tools);
         renderSettingsGroups(tools);
         settingsLoaded = true;
-        if (tools.length > 0 && settingsGroupsEl.childElementCount > 0) {
-          settingsStatusEl.textContent = "";
-        }
       } catch (err) {
-        settingsStatusEl.textContent = String(err);
+        setSettingsStatus(String(err), true);
       }
     }
 
     async function saveSettings() {
-      settingsStatusEl.textContent = "Saving…";
+      setSettingsStatus("Saving…", false);
       try {
-        const res = await fetch("api/settings", {
-          method: "PATCH",
+        const { data } = await apiFetch("api/settings", {
+          method: "POST",
           headers: { "Content-Type": "application/json" },
-          cache: "no-store",
           body: JSON.stringify({ tools: settingsDraft }),
         });
-        let data;
-        try {
-          data = await res.json();
-        } catch (_err) {
-          data = {};
-        }
-        if (!res.ok) {
-          settingsStatusEl.textContent = data.error || "Save failed";
-          return;
-        }
         const { tools, error } = normalizeTools(data);
         if (error) {
-          settingsGroupsEl.innerHTML = "";
-          settingsStatusEl.textContent = error;
+          if (settingsGroupsEl) settingsGroupsEl.innerHTML = "";
+          setSettingsStatus(error, true);
           return;
         }
         settingsDraft = settingsDraftFromTools(tools);
-        renderSettingsGroups(tools);
-        settingsStatusEl.textContent = "Saved.";
+        if (renderSettingsGroups(tools)) {
+          setSettingsStatus("Saved.", false);
+        }
       } catch (err) {
-        settingsStatusEl.textContent = String(err);
+        setSettingsStatus(String(err), true);
       }
     }
 
@@ -1092,12 +1171,11 @@
     });
 
     async function postJson(url, body) {
-      const res = await fetch(url, {
+      const { res, data } = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
       return { ok: res.ok, status: res.status, data };
     }
 
@@ -1161,8 +1239,8 @@
       }
     });
 
-    fetchStats();
-    loadSession();
+    fetchStats().catch(() => {});
+    loadSession({ quiet: true }).catch(() => {});
   </script>
 </body>
 </html>

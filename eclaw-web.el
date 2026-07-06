@@ -73,6 +73,14 @@ from a scratch buffer with a surprising `default-directory')."
   :type 'string
   :group 'eclaw-web)
 
+(defcustom eclaw-web-base-path ""
+  "URL path prefix when eclaw is served behind a reverse proxy (e.g. \"/muuclaw\").
+Incoming request paths with this prefix are stripped before routing.  The chat
+page gets a matching `<base href=\"…\">' tag so relative `api/…' URLs resolve
+correctly.  Leave empty when the app is mounted at the site root."
+  :type 'string
+  :group 'eclaw-web)
+
 (defvar eclaw-web-server nil
   "The active `ws-server' object, or nil when stopped.")
 
@@ -125,12 +133,43 @@ from a scratch buffer with a surprising `default-directory')."
   "Return `default-directory' for web chat tool calls."
   (eclaw--folder))
 
+(defun eclaw-web--base-path-normalized ()
+  "Return `eclaw-web-base-path' as \"/prefix\" or \"\" when unset."
+  (let ((path (or eclaw-web-base-path "")))
+    (if (string-empty-p path)
+        ""
+      (concat "/" (string-trim-left (string-trim-right path "/") "/")))))
+
+(defun eclaw-web--strip-base-path (path)
+  "Remove `eclaw-web-base-path' from PATH when present."
+  (when path
+    (let ((base (eclaw-web--base-path-normalized)))
+      (let ((stripped
+             (if (and (not (string-empty-p base))
+                      (or (string= path base)
+                          (string-prefix-p (concat base "/") path)))
+                 (substring path (length base))
+               path)))
+        (cond
+         ((or (null stripped) (string-empty-p stripped)) "/")
+         ((not (string-prefix-p "/" stripped)) (concat "/" stripped))
+         (t stripped))))))
+
+(defun eclaw-web--serve-chat-html ()
+  "Return chat.html with `ECLAW_WEB_BASE' set for subpath reverse-proxy deploys."
+  (replace-regexp-in-string
+   "const ECLAW_WEB_BASE = \"\";"
+   (format "const ECLAW_WEB_BASE = %s;"
+           (json-encode (eclaw-web--base-path-normalized)))
+   (eclaw-web--read-file "chat.html")))
+
 (defun eclaw-web--url ()
-  (format "http://%s:%d/" eclaw-web-host eclaw-web-port))
+  (format "http://%s:%d%s/" eclaw-web-host eclaw-web-port
+          (eclaw-web--base-path-normalized)))
 
 (defun eclaw-web--request-path (request method)
   "Return the URL path for REQUEST and HTTP METHOD keyword."
-  (cdr (assoc method (ws-headers request))))
+  (eclaw-web--strip-base-path (cdr (assoc method (ws-headers request)))))
 
 (defun eclaw-web--json-response (process status alist)
   "Send JSON-encoded ALIST to PROCESS with HTTP STATUS."
@@ -138,8 +177,8 @@ from a scratch buffer with a surprising `default-directory')."
         (json-array-type 'list)
         (json-key-type 'string))
     (ws-response-header process status
-                        '(("Content-type" . "application/json")
-                          ("Cache-Control" . "no-store")))
+                        '("Content-type" . "application/json")
+                        '("Cache-Control" . "no-store"))
     (process-send-string process (json-encode alist))))
 
 (defun eclaw-web--parse-json-body (body)
@@ -183,7 +222,7 @@ from a scratch buffer with a surprising `default-directory')."
 (defun eclaw-web--handle-get-index (request)
   (with-slots (process) request
     (ws-response-header process 200 '("Content-type" . "text/html; charset=utf-8"))
-    (process-send-string process (eclaw-web--read-file "chat.html"))))
+    (process-send-string process (eclaw-web--serve-chat-html))))
 
 (defun eclaw-web--handle-post-chat (request)
   (with-slots (process body) request
