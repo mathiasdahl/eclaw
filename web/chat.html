@@ -1055,7 +1055,7 @@
           const nextEnabled = checkbox.checked;
           if (checkbox.dataset.risk === "dangerous" && nextEnabled && !wasEnabled) {
             const ok = window.confirm(
-              `Enable "${name}"?\n\nThis tool can run arbitrary Elisp in your Emacs session, including modifying eclaw itself. Only continue on a trusted localhost session.`
+              `Enable "${name}"?\n\nThis tool can run arbitrary Elisp in your Emacs session, including modifying eclaw itself. It is not a sandbox (see docs/eval-elisp-security.md). Only continue on a trusted localhost session.`
             );
             if (!ok) {
               checkbox.checked = false;

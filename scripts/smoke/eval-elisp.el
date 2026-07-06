@@ -1,5 +1,7 @@
 ;;; smoke/eval-elisp.el — tool policy defaults and eval_elisp handler checks.
 
+(setq eclaw-folder (make-temp-file "eclaw-smoke-eval-" t))
+
 (require 'eclaw)
 
 (defun smoke--assert (label condition)
@@ -14,8 +16,11 @@
          (and fn (string= name (cdr (assoc 'name fn))))))
      defs)))
 
-(let* ((tmpdir (make-temp-file "eclaw-smoke-eval-" t)))
-  (setq eclaw-folder tmpdir)
+(defun smoke--eval-with-mode (mode code)
+  (let ((eclaw-eval-safety-mode mode))
+    (eclaw-tool-eval-elisp code)))
+
+(let* ((tmpdir eclaw-folder))
   (setq eclaw--tool-policy-loaded nil)
   (setq eclaw--tool-policy nil)
 
@@ -43,8 +48,36 @@
   (smoke--assert "eval_elisp advertised after enable"
                  (smoke--tool-in-definitions-p "eval_elisp"))
 
-  (smoke--assert "eval_elisp evaluates code"
-                 (string-equal "result=3" (eclaw-tool-eval-elisp "(+ 1 2)")))
+  (smoke--assert "full mode evaluates code"
+                 (string-equal "result=3" (smoke--eval-with-mode 'full "(+ 1 2)")))
+
+  (smoke--assert "trailing input rejected"
+                 (string-match-p "trailing input"
+                                   (smoke--eval-with-mode 'full "(+ 1 2) (+ 3 4)")))
+
+  (smoke--assert "restricted blocks shell-command"
+                 (string-match-p "blocked call to `shell-command'"
+                                   (smoke--eval-with-mode 'restricted
+                                                          "(shell-command \"echo hi\")")))
+
+  (smoke--assert "restricted allows defun"
+                 (string-equal "result=1"
+                               (smoke--eval-with-mode 'restricted
+                                                      "(progn (defun smoke-restricted-f () 1) (smoke-restricted-f))")))
+
+  (smoke--assert "restricted blocks nested shell"
+                 (let ((result (smoke--eval-with-mode 'restricted
+                                                    "(progn (defun smoke-nested-evil () (shell-command \"x\")) (smoke-nested-evil))")))
+                   (or (string-match-p "blocked by eclaw eval safety" result)
+                       (string-match-p "blocked call to `shell-command'" result))))
+
+  (smoke--assert "strict rejects defun"
+                 (string-match-p "strict"
+                                   (smoke--eval-with-mode 'strict "(defun smoke-strict-f () 1)")))
+
+  (smoke--assert "strict rejects shell-command"
+                 (string-match-p "strict"
+                                   (smoke--eval-with-mode 'strict "(shell-command \"echo hi\")")))
 
   (eclaw-tool-policy-set "eval_elisp" nil)
 

@@ -63,4 +63,8 @@ The web UI sends the full `tools` map on save (all checkboxes), not just changed
 
 Full Elisp evaluation in the running Emacs session (`eval form t`). Disabled by default. Limits: `eclaw-eval-timeout-seconds` (default 30), `eclaw-eval-max-code-length` (32768 bytes). Use `(progn ...)` for multiple forms.
 
+Optional content guards: `eclaw-eval-safety-mode` (`full` default, `restricted`, `strict`). See [eval_elisp security](eval-elisp-security.md).
+
 When enabled, the model can redefine functions, set variables, `require` files, and modify eclaw at runtime. Only enable on trusted localhost sessions.
+
+**Security:** not a sandbox. See [eval_elisp security](eval-elisp-security.md) for the trust model, safety modes, and safe usage checklist.

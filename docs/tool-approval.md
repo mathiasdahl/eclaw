@@ -11,6 +11,8 @@ eclaw gates local tool execution before handlers run (`eclaw-tool-approval-mode`
 
 Write tools (`notes_write_text`, `skill_write`, …) are tagged `:write` in the registry. Tools with full session access (`eval_elisp`, …) are tagged `:dangerous`. With `writes`, both `:write` and `:dangerous` tools are gated; with `all`, every registered tool is gated.
 
+For `eval_elisp`, read the code shown in the approval prompt carefully — approval grants full session access unless `eclaw-eval-safety-mode` is `restricted` or `strict`. See [eval_elisp security](eval-elisp-security.md).
+
 ## Gate order (`eclaw--dispatch-one-tool-call`)
 
 1. Not gated (`off`, or read tool under `writes`) → run handler.
