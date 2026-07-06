@@ -56,10 +56,11 @@
 ;;                      `docs/http-transport.md')
 ;;   eclaw-web-search.el — `web_search' and `web_fetch' tools (Jina by default)
 ;;   eclaw-mail.el      — `send_email' tool (work/home only via `mailme-mail')
+;;   eclaw-eval.el      — `eval_elisp' tool (full session eval; policy-gated)
 ;;
 ;; Load order in `eclaw.el': `(require 'eclaw-skills)' before conversation;
 ;; `(require 'eclaw-tools)', `(require 'eclaw-http)', `(require 'eclaw-web-search)',
-;; and `(require 'eclaw-mail)' before `eclaw-build-chat-payload' / `eclaw-chat'.
+;; `(require 'eclaw-mail)', and `(require 'eclaw-eval)' before `eclaw-build-chat-payload' / `eclaw-chat'.
 ;;
 ;; Layers (logical):
 ;;
@@ -484,6 +485,7 @@ CONTENT may be nil; it is stored as an empty string."
 (require 'eclaw-http)
 (require 'eclaw-web-search)
 (require 'eclaw-mail)
+(require 'eclaw-eval)
 
 (defun eclaw-build-chat-payload (messages)
   "Return the JSON-serializable request alist for message list MESSAGES.

@@ -314,22 +314,22 @@ Get a free key at https://jina.ai/?sui=apikey — required for `web_search'."
   "Fetch URL content using `eclaw-web-search-provider'; return result text."
   (funcall (eclaw--ws-provider-fetch-fn eclaw-web-search-provider) url))
 
-(when eclaw-web-search-enabled
-  (eclaw-deftool web_search
-    "Search the live web for current information. Returns numbered results with URLs and snippets."
-    ((query :string "Search query string.")
-     (max_results :integer
-                  "Maximum number of results (default 5; hard cap 10)."
-                  :optional))
-    (if query
-        (eclaw-web-search query max_results)
-      "Error: web_search requires \"query\" in arguments."))
-  (eclaw-deftool web_fetch
-    "Fetch and read the main text content of a specific URL. Prefer web_search first, then fetch result URLs for detail."
-    ((url :string "HTTP or HTTPS URL to fetch."))
-    (if url
-        (eclaw-web-fetch url)
-      "Error: web_fetch requires \"url\" in arguments.")))
+(eclaw-deftool web_search
+  "Search the live web for current information. Returns numbered results with URLs and snippets."
+  ((query :string "Search query string.")
+   (max_results :integer
+                "Maximum number of results (default 5; hard cap 10)."
+                :optional))
+  (if query
+      (eclaw-web-search query max_results)
+    "Error: web_search requires \"query\" in arguments."))
+
+(eclaw-deftool web_fetch
+  "Fetch and read the main text content of a specific URL. Prefer web_search first, then fetch result URLs for detail."
+  ((url :string "HTTP or HTTPS URL to fetch."))
+  (if url
+      (eclaw-web-fetch url)
+    "Error: web_fetch requires \"url\" in arguments."))
 
 (provide 'eclaw-web-search)
 ;;; eclaw-web-search.el ends here

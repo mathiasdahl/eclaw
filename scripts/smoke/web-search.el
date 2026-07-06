@@ -67,9 +67,14 @@
                  (string-equal result eclaw--ws-url-blocked-msg)))
 
 (when eclaw-web-search-enabled
-  (smoke--assert "web_search registered"
-                   (gethash "web_search" eclaw--tool-registry))
-  (smoke--assert "web_fetch registered"
-                   (gethash "web_fetch" eclaw--tool-registry)))
+  (smoke--assert "web_search enabled in policy by default"
+                 (eclaw-tool-policy-enabled-p "web_search"))
+  (smoke--assert "web_fetch enabled in policy by default"
+                 (eclaw-tool-policy-enabled-p "web_fetch")))
+
+(smoke--assert "web_search registered"
+               (gethash "web_search" eclaw--tool-registry))
+(smoke--assert "web_fetch registered"
+               (gethash "web_fetch" eclaw--tool-registry))
 
 (message "smoke web-search: OK")

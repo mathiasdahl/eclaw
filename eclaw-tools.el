@@ -58,6 +58,10 @@ Populated by `eclaw-deftool'.  :risk is `:read' (default) or `:write'.")
   "Error: tool execution not approved (eclaw)."
   "Sent to the model when a gated tool is skipped (user refusal or batch deny).")
 
+(defconst eclaw--tool-policy-disabled-msg
+  "Error: tool disabled by eclaw tool policy."
+  "Constant denial message when a tool is disabled in `tool-policy.el'.")
+
 (defvar eclaw-tools-enabled t
   "When non-nil, include registered tools in outgoing chat requests.
 When nil, behave like text-only completions regardless of registry contents.")
@@ -72,7 +76,8 @@ you trust the workflow.
 `off' — run tools immediately (no prompts).
 
 `writes' — interactively approve each call to tools tagged `:write'
-          (`notes_write_text', `skill_write', …).
+          (`notes_write_text', `skill_write', …) or `:dangerous'
+          (`eval_elisp', …).
 
 `all' — interactively approve every registered tool before it runs."
   :type '(choice (const :tag "Off (no approval)" off)
@@ -405,8 +410,11 @@ DESCRIPTION is the one-line skills-index summary; CONTENT is the markdown body
 (eval-and-compile
 
 (defun eclaw--normalize-tool-risk (risk)
-  "Return `:write' if RISK is `:write', otherwise `:read'."
-  (if (eq risk :write) :write :read))
+  "Return `:write', `:dangerous', or `:read' from RISK."
+  (pcase risk
+    (:write :write)
+    (:dangerous :dangerous)
+    (_ :read)))
 
 (defun eclaw--deftool-leading-options-p (form)
   "Non-nil when FORM is a property list of `eclaw-deftool' options.
@@ -423,7 +431,8 @@ Recognized keys include `:risk' (value `:read' or `:write')."
 PARAMETERS-SCHEMA is the JSON Schema `parameters' object (type object,
 properties, required).  HANDLER is `(lambda (args) ...)' with ARGS an
 alist of symbol keys from parsed tool arguments.
-Optional RISK is `:read' (default) or `:write' (side effects on disk)."
+Optional RISK is `:read' (default), `:write' (side effects on disk),
+or `:dangerous' (full session access, e.g. `eval_elisp')."
   (puthash name
            (list :description description
                  :parameters parameters-schema
@@ -432,7 +441,7 @@ Optional RISK is `:read' (default) or `:write' (side effects on disk)."
            eclaw--tool-registry))
 
 (defun eclaw--tool-risk-class (tool-name)
-  "Return TOOL-NAME's risk symbol `:read' or `:write', default `:read'."
+  "Return TOOL-NAME's risk symbol `:read', `:write', or `:dangerous'."
   (if-let ((info (gethash tool-name eclaw--tool-registry)))
       (eclaw--normalize-tool-risk (plist-get info :risk))
     :read))
@@ -441,9 +450,166 @@ Optional RISK is `:read' (default) or `:write' (side effects on disk)."
   "Non-nil when `eclaw-tool-approval-mode' gates execution of TOOL-NAME."
   (pcase eclaw-tool-approval-mode
     ('off nil)
-    ('writes (eq (eclaw--tool-risk-class tool-name) :write))
+    ('writes (memq (eclaw--tool-risk-class tool-name) '(:write :dangerous)))
     ('all t)
     (_ nil)))
+
+(defvar eclaw--tool-policy nil
+  "Alist of (TOOL-NAME . ENABLED-P) persisted under `eclaw-folder'.
+When a tool is absent, `eclaw--tool-policy-default-enabled-p' applies.
+Loaded from `eclaw--tool-policy-file'.")
+
+(defvar eclaw--tool-policy-loaded nil
+  "Non-nil once `eclaw--tool-policy-load' has run.")
+
+(defun eclaw--tool-policy-file ()
+  "Return the path to the persisted tool policy file."
+  (expand-file-name "tool-policy.el" (eclaw--folder)))
+
+(defun eclaw--tool-policy-entry-valid-p (entry)
+  "Non-nil when ENTRY is a well-formed `(tool-name . boolean)' pair."
+  (and (consp entry)
+       (stringp (car entry))
+       (member (cdr entry) '(t nil))))
+
+(defun eclaw--tool-policy-default-enabled-p (tool-name)
+  "Return default enabled state for TOOL-NAME when not in `eclaw--tool-policy'."
+  (pcase tool-name
+    ("eval_elisp" nil)
+    ("web_search"
+     (if (boundp 'eclaw-web-search-enabled) eclaw-web-search-enabled t))
+    ("web_fetch"
+     (if (boundp 'eclaw-web-search-enabled) eclaw-web-search-enabled t))
+    ("send_email"
+     (if (boundp 'eclaw-mail-enabled) eclaw-mail-enabled t))
+    (_ t)))
+
+(defun eclaw--tool-policy-effective-p (tool-name)
+  "Return non-nil when TOOL-NAME is enabled by persisted or default policy."
+  (let ((entry (assoc-string tool-name eclaw--tool-policy)))
+    (if entry (cdr entry)
+      (eclaw--tool-policy-default-enabled-p tool-name))))
+
+(defun eclaw--tool-policy-load ()
+  "Load `eclaw--tool-policy' from disk once per session."
+  (unless eclaw--tool-policy-loaded
+    (setq eclaw--tool-policy-loaded t)
+    (setq eclaw--tool-policy
+          (let ((path (eclaw--tool-policy-file)))
+            (if (file-readable-p path)
+                (condition-case nil
+                    (with-temp-buffer
+                      (insert-file-contents path)
+                      (goto-char (point-min))
+                      (let ((policy (read (current-buffer))))
+                        (if (and (listp policy)
+                                 (seq-every-p #'eclaw--tool-policy-entry-valid-p
+                                              policy))
+                            policy
+                          (progn
+                            (eclaw-message "eclaw: ignoring invalid tool policy in %s"
+                                           path)
+                            nil))))
+                  (error
+                   (eclaw-message "eclaw: could not read tool policy from %s" path)
+                   nil))
+              nil)))))
+
+(defun eclaw--tool-policy-save ()
+  "Write `eclaw--tool-policy' to `eclaw--tool-policy-file'."
+  (let ((path (eclaw--tool-policy-file)))
+    (make-directory (file-name-directory path) t)
+    (with-temp-file path
+      (let ((print-length nil)
+            (print-level nil))
+        (prin1 eclaw--tool-policy (current-buffer))))))
+
+(defun eclaw-tool-policy-enabled-p (tool-name)
+  "Non-nil when TOOL-NAME is enabled in the runtime tool policy."
+  (eclaw--tool-policy-load)
+  (eclaw--tool-policy-effective-p tool-name))
+
+(defun eclaw-tool-policy-list ()
+  "Return sorted tool policy rows as plists for JSON encoding.
+Each plist has keys `name', `description', `risk' (string), and `enabled'."
+  (eclaw--tool-policy-load)
+  (mapcar
+   (lambda (name)
+     (let* ((info (gethash name eclaw--tool-registry))
+            (risk (eclaw--tool-risk-class name)))
+       (list 'name name
+             'description (or (plist-get info :description) "")
+             'risk (symbol-name risk)
+             'enabled (eclaw--tool-policy-effective-p name))))
+   (eclaw--registry-tool-names-sorted)))
+
+(defun eclaw-tool-policy-set (tool-name enabled)
+  "Persist ENABLED (boolean) for TOOL-NAME and save `tool-policy.el'."
+  (unless (gethash tool-name eclaw--tool-registry)
+    (error "Unknown tool: %S" tool-name))
+  (unless (member enabled '(t nil))
+    (error "Tool policy enabled value must be t or nil"))
+  (eclaw--tool-policy-load)
+  (setq eclaw--tool-policy
+        (mapcar (lambda (name)
+                  (cons name
+                        (if (string= name tool-name)
+                            enabled
+                          (eclaw--tool-policy-effective-p name))))
+                (eclaw--registry-tool-names-sorted)))
+  (eclaw--tool-policy-save))
+
+(defun eclaw-tool-policy-apply-updates (updates)
+  "Apply alist UPDATES of (tool-name-string . enabled-boolean) and save."
+  (dolist (pair updates)
+    (let ((name (car pair))
+          (enabled (cdr pair)))
+      (unless (gethash name eclaw--tool-registry)
+        (error "Unknown tool in policy update: %S" name))
+      (unless (member enabled '(t nil))
+        (error "Tool policy value must be boolean for %S" name))))
+  (eclaw--tool-policy-load)
+  (setq eclaw--tool-policy
+        (mapcar (lambda (name)
+                  (let ((override (assoc-string name updates)))
+                    (cons name (if override (cdr override)
+                                 (eclaw--tool-policy-effective-p name)))))
+                (eclaw--registry-tool-names-sorted)))
+  (eclaw--tool-policy-save))
+
+;;;###autoload
+(defun eclaw-list-tool-policy ()
+  "List persisted tool policy in a temporary buffer."
+  (interactive)
+  (eclaw--tool-policy-load)
+  (let ((buf (get-buffer-create "*eclaw tool policy*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "eclaw tool policy\n")
+        (insert (format "File: %s\n\n" (eclaw--tool-policy-file)))
+        (dolist (row (eclaw-tool-policy-list))
+          (insert (format "- %s [%s] %s\n"
+                          (plist-get row 'name)
+                          (plist-get row 'risk)
+                          (if (plist-get row 'enabled) "enabled" "disabled"))))
+        (goto-char (point-min))
+        (special-mode)))
+    (pop-to-buffer buf)))
+
+;;;###autoload
+(defun eclaw-set-tool-policy (tool-name enabled)
+  "Set persisted enabled state for TOOL-NAME (interactive completion)."
+  (interactive
+   (let* ((names (eclaw--registry-tool-names-sorted))
+          (name (completing-read "Tool: " names nil t))
+          (state (completing-read
+                  (format "Enable `%s'? " name)
+                  '("yes" "no") nil t)))
+     (list name (string= state "yes"))))
+  (eclaw-tool-policy-set tool-name enabled)
+  (eclaw-message "eclaw: tool `%s' %s in policy"
+                 tool-name (if enabled "enabled" "disabled")))
 
 (defvar eclaw--tool-approval-rules nil
   "Alist of (RULE-KEY . POLICY) persisted allow rules under `eclaw-folder'.
@@ -809,9 +975,9 @@ TYPE-KEYWORD is :string, :integer, etc.; each SYM is bound in BODY
 from the parsed arguments alist passed to the implementation.
 Use `:optional' as fourth element to omit the property from JSON `required'.
 
-Optional leading property list `(:risk :write)' or `(:risk :read)' may
-appear immediately before BODY (default `:read').  BODY should return a
-string (tool result content for the model)."
+Optional leading property list `(:risk :write)', `(:risk :dangerous)', or
+`(:risk :read)' may appear immediately before BODY (default `:read').
+BODY should return a string (tool result content for the model)."
   (declare (indent 2))
   (unless (stringp description)
     (error "`eclaw-deftool' description must be a string"))
@@ -842,14 +1008,15 @@ to nil for text-only requests."
   (when (and eclaw-tools-enabled (> (hash-table-count eclaw--tool-registry) 0))
     (let (out)
       (dolist (name (eclaw--registry-tool-names-sorted))
-        (let* ((info (gethash name eclaw--tool-registry))
-               (descr (plist-get info :description))
-               (params (plist-get info :parameters)))
-          (push `((type . "function")
-                  (function . ((name . ,name)
-                               (description . ,descr)
-                               (parameters . ,params))))
-                out)))
+        (when (eclaw-tool-policy-enabled-p name)
+          (let* ((info (gethash name eclaw--tool-registry))
+                 (descr (plist-get info :description))
+                 (params (plist-get info :parameters)))
+            (push `((type . "function")
+                    (function . ((name . ,name)
+                                 (description . ,descr)
+                                 (parameters . ,params))))
+                  out))))
       (nreverse out))))
 
 ;;; Tool execution
@@ -1860,39 +2027,44 @@ via `eclaw--tool-approval-transcript-line' (audit of allow vs deny)."
              (format " %s…" (substring args-summary 0 max))
            (format " %s" args-summary)))))
     (let ((default-directory (eclaw--folder)))
-      (if-let ((info (gethash name eclaw--tool-registry))
-               (handler (plist-get info :handler)))
-          (let ((gated-p (eclaw--tool-call-would-require-approval-p name)))
-            (let ((result
-                   (cond
-                    ((not gated-p)
-                     (funcall handler args))
-                  ((eclaw--tool-approval-rule-allows-p name args)
-                   (eclaw--tool-approval-transcript-line name args-summary t 'saved-rule)
-                   (funcall handler args))
-                  ((eclaw--tool-approval-session-rule-allows-p name args)
-                   (eclaw--tool-approval-transcript-line name args-summary t 'session-rule)
-                   (funcall handler args))
-                  (noninteractive
-                   (let ((allow-p (eq eclaw-tool-approval-noninteractive 'allow)))
-                     (eclaw--tool-approval-transcript-line name args-summary allow-p 'batch)
-                     (if allow-p
-                         (funcall handler args)
-                       eclaw--tool-call-not-approved-msg)))
-                  (t
-                   (let ((choice (eclaw--user-approves-tool-call-p name args-summary args)))
-                     (if (memq choice '(once session session-project session-exact
-                                        remember remember-project remember-exact))
-                         (progn
-                           (eclaw--tool-approval-transcript-line
-                            name args-summary t
-                            (if (eq choice 'once) 'interactive choice))
-                           (funcall handler args))
-                       (eclaw--tool-approval-transcript-line name args-summary nil 'interactive)
-                       eclaw--tool-call-not-approved-msg))))))
-            (eclaw-debug-message "eclaw: tool %s done" name)
-            result))
-        (format "Unknown tool: %s" name)))))
+      (cond
+       ((not (eclaw-tool-policy-enabled-p name))
+        eclaw--tool-policy-disabled-msg)
+       ((not (gethash name eclaw--tool-registry))
+        (format "Unknown tool: %s" name))
+       (t
+        (let* ((info (gethash name eclaw--tool-registry))
+               (handler (plist-get info :handler))
+               (gated-p (eclaw--tool-call-would-require-approval-p name))
+               (result
+                (cond
+                 ((not gated-p)
+                  (funcall handler args))
+                 ((eclaw--tool-approval-rule-allows-p name args)
+                  (eclaw--tool-approval-transcript-line name args-summary t 'saved-rule)
+                  (funcall handler args))
+                 ((eclaw--tool-approval-session-rule-allows-p name args)
+                  (eclaw--tool-approval-transcript-line name args-summary t 'session-rule)
+                  (funcall handler args))
+                 (noninteractive
+                  (let ((allow-p (eq eclaw-tool-approval-noninteractive 'allow)))
+                    (eclaw--tool-approval-transcript-line name args-summary allow-p 'batch)
+                    (if allow-p
+                        (funcall handler args)
+                      eclaw--tool-call-not-approved-msg)))
+                 (t
+                  (let ((choice (eclaw--user-approves-tool-call-p name args-summary args)))
+                    (if (memq choice '(once session session-project session-exact
+                                       remember remember-project remember-exact))
+                        (progn
+                          (eclaw--tool-approval-transcript-line
+                           name args-summary t
+                           (if (eq choice 'once) 'interactive choice))
+                          (funcall handler args))
+                      (eclaw--tool-approval-transcript-line name args-summary nil 'interactive)
+                      eclaw--tool-call-not-approved-msg))))))
+          (eclaw-debug-message "eclaw: tool %s done" name)
+          result))))))
 
 (defun eclaw--tool-result-messages (tool-calls &optional synth-reason)
   "Return a list of tool message alists, one per element of TOOL-CALLS.

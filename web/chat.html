@@ -485,6 +485,102 @@
       color: var(--text);
     }
 
+    #settings-panel {
+      margin-bottom: 0.75rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--msg-assistant-bg);
+    }
+
+    #settings-panel[hidden] {
+      display: none;
+    }
+
+    #settings-panel h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1rem;
+    }
+
+    #settings-panel .settings-intro {
+      margin: 0 0 0.75rem;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
+    #settings-panel .settings-warning {
+      margin: 0 0 0.75rem;
+      padding: 0.5rem 0.65rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--msg-error-border);
+      background: var(--msg-error-bg);
+      color: var(--msg-error-text);
+      font-size: 0.85rem;
+    }
+
+    .settings-group {
+      margin-bottom: 0.75rem;
+    }
+
+    .settings-group h3 {
+      margin: 0 0 0.35rem;
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .settings-tool {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-start;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .settings-tool:last-child {
+      border-bottom: none;
+    }
+
+    .settings-tool label {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-start;
+      cursor: pointer;
+      flex: 1;
+    }
+
+    .settings-tool input[type="checkbox"] {
+      margin-top: 0.2rem;
+    }
+
+    .settings-tool-name {
+      font-weight: 600;
+    }
+
+    .settings-tool-desc {
+      display: block;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      margin-top: 0.15rem;
+    }
+
+    .settings-tool.dangerous .settings-tool-name {
+      color: var(--msg-error-text);
+    }
+
+    .settings-actions {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    #settings-status {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
     @keyframes glitchFlicker {
       0%, 100% { opacity: 1; }
       20% { opacity: 0.85; }
@@ -511,6 +607,7 @@
     <div id="toolbar">
       <button type="button" id="reset">New conversation</button>
       <button type="button" id="load-session">Load session</button>
+      <button type="button" id="settings-toggle">Settings</button>
       <label class="theme-label" for="theme-select">Theme</label>
       <select id="theme-select" aria-label="Theme">
         <option value="default">Default</option>
@@ -519,6 +616,16 @@
         <option value="matrix-full">Matrix (full)</option>
       </select>
     </div>
+    <section id="settings-panel" hidden aria-label="Tool settings">
+      <h2>Tool policy</h2>
+      <p class="settings-intro">Choose which tools the model may call. Changes apply to the next message. Dangerous tools can run arbitrary Elisp in this Emacs session.</p>
+      <p class="settings-warning">Only enable dangerous tools on trusted localhost sessions. The web chat runs tools without interactive approval prompts.</p>
+      <div id="settings-groups"></div>
+      <div class="settings-actions">
+        <button type="button" id="settings-save" class="primary">Save tool policy</button>
+        <span id="settings-status" aria-live="polite"></span>
+      </div>
+    </section>
     <div id="messages" aria-live="polite"></div>
     <div id="usage-stats" aria-live="polite" aria-label="Token usage"></div>
     <form id="form">
@@ -535,6 +642,11 @@
     const sendBtn = document.getElementById("send");
     const resetBtn = document.getElementById("reset");
     const loadSessionBtn = document.getElementById("load-session");
+    const settingsToggleBtn = document.getElementById("settings-toggle");
+    const settingsPanel = document.getElementById("settings-panel");
+    const settingsGroupsEl = document.getElementById("settings-groups");
+    const settingsSaveBtn = document.getElementById("settings-save");
+    const settingsStatusEl = document.getElementById("settings-status");
     const themeSelect = document.getElementById("theme-select");
     const usageStatsEl = document.getElementById("usage-stats");
     const rainCanvas = document.getElementById("matrix-rain");
@@ -780,8 +892,143 @@
       sendBtn.disabled = busy;
       resetBtn.disabled = busy;
       loadSessionBtn.disabled = busy;
+      settingsToggleBtn.disabled = busy;
+      settingsSaveBtn.disabled = busy;
       promptEl.disabled = busy;
     }
+
+    const SETTINGS_GROUP_ORDER = ["read", "write", "dangerous"];
+    const SETTINGS_GROUP_LABELS = {
+      read: "Read tools",
+      write: "Write tools",
+      dangerous: "Dangerous tools",
+    };
+
+    let settingsLoaded = false;
+    let settingsDraft = {};
+
+    function settingsDraftFromTools(tools) {
+      const draft = {};
+      for (const tool of tools) {
+        draft[tool.name] = !!tool.enabled;
+      }
+      return draft;
+    }
+
+    function renderSettingsGroups(tools) {
+      settingsGroupsEl.innerHTML = "";
+      const grouped = Object.fromEntries(SETTINGS_GROUP_ORDER.map((risk) => [risk, []]));
+      for (const tool of tools) {
+        const risk = tool.risk || "read";
+        if (!grouped[risk]) grouped[risk] = [];
+        grouped[risk].push(tool);
+      }
+      for (const risk of SETTINGS_GROUP_ORDER) {
+        const items = grouped[risk] || [];
+        if (items.length === 0) continue;
+        const section = document.createElement("div");
+        section.className = "settings-group";
+        const heading = document.createElement("h3");
+        heading.textContent = SETTINGS_GROUP_LABELS[risk] || risk;
+        section.appendChild(heading);
+        for (const tool of items) {
+          const row = document.createElement("div");
+          row.className = "settings-tool" + (risk === "dangerous" ? " dangerous" : "");
+          const label = document.createElement("label");
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = !!settingsDraft[tool.name];
+          checkbox.dataset.toolName = tool.name;
+          checkbox.dataset.risk = risk;
+          checkbox.addEventListener("change", () => {
+            const name = checkbox.dataset.toolName;
+            const wasEnabled = settingsDraft[name];
+            const nextEnabled = checkbox.checked;
+            if (checkbox.dataset.risk === "dangerous" && nextEnabled && !wasEnabled) {
+              const ok = window.confirm(
+                `Enable "${name}"?\n\nThis tool can run arbitrary Elisp in your Emacs session, including modifying eclaw itself. Only continue on a trusted localhost session.`
+              );
+              if (!ok) {
+                checkbox.checked = false;
+                return;
+              }
+            }
+            settingsDraft[name] = nextEnabled;
+          });
+          label.appendChild(checkbox);
+          const text = document.createElement("span");
+          const nameEl = document.createElement("span");
+          nameEl.className = "settings-tool-name";
+          nameEl.textContent = tool.name;
+          const descEl = document.createElement("span");
+          descEl.className = "settings-tool-desc";
+          descEl.textContent = tool.description || "";
+          text.appendChild(nameEl);
+          text.appendChild(descEl);
+          label.appendChild(text);
+          row.appendChild(label);
+          section.appendChild(row);
+        }
+        settingsGroupsEl.appendChild(section);
+      }
+    }
+
+    async function loadSettings(force) {
+      if (settingsLoaded && !force) return;
+      settingsStatusEl.textContent = "Loading…";
+      try {
+        const res = await fetch("api/settings");
+        const data = await res.json();
+        if (!res.ok) {
+          settingsStatusEl.textContent = data.error || "Failed to load settings";
+          return;
+        }
+        settingsDraft = settingsDraftFromTools(Array.isArray(data.tools) ? data.tools : []);
+        renderSettingsGroups(Array.isArray(data.tools) ? data.tools : []);
+        settingsLoaded = true;
+        settingsStatusEl.textContent = "";
+      } catch (err) {
+        settingsStatusEl.textContent = String(err);
+      }
+    }
+
+    async function saveSettings() {
+      settingsStatusEl.textContent = "Saving…";
+      try {
+        const res = await fetch("api/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tools: settingsDraft }),
+        });
+        let data;
+        try {
+          data = await res.json();
+        } catch (_err) {
+          data = {};
+        }
+        if (!res.ok) {
+          settingsStatusEl.textContent = data.error || "Save failed";
+          return;
+        }
+        settingsDraft = settingsDraftFromTools(Array.isArray(data.tools) ? data.tools : []);
+        renderSettingsGroups(Array.isArray(data.tools) ? data.tools : []);
+        settingsStatusEl.textContent = "Saved.";
+      } catch (err) {
+        settingsStatusEl.textContent = String(err);
+      }
+    }
+
+    settingsToggleBtn.addEventListener("click", async () => {
+      const opening = settingsPanel.hidden;
+      settingsPanel.hidden = !opening;
+      if (opening) {
+        await loadSettings(true);
+      }
+    });
+
+    settingsSaveBtn.addEventListener("click", () => {
+      saveSettings();
+    });
 
     async function postJson(url, body) {
       const res = await fetch(url, {

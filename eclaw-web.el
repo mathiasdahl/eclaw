@@ -37,7 +37,8 @@
 ;;
 ;; SECURITY: binds to 127.0.0.1 only. Do not expose this port on a network.
 ;; Tool approval is forced off (`eclaw-tool-approval-mode' `off') while handling
-;; web requests so tools run without minibuffer prompts.
+;; web requests so tools run without minibuffer prompts.  Disabled tools are
+;; excluded by `tool-policy.el'; dangerous tools require explicit web opt-in.
 ;;
 ;; Shares global `eclaw-conversation' with `M-x eclaw-agent-chat' and `*eclaw*'.
 
@@ -86,6 +87,9 @@ from a scratch buffer with a surprising `default-directory')."
 (declare-function eclaw--folder "eclaw" ())
 (declare-function eclaw-usage-stats "eclaw" ())
 (declare-function eclaw-conversation-display-messages "eclaw" ())
+(declare-function eclaw-tool-policy-list "eclaw-tools" ())
+(declare-function eclaw-tool-policy-apply-updates "eclaw-tools" (updates))
+(declare-function eclaw--tool-policy-file "eclaw-tools" ())
 
 (defun eclaw-web--data-dir ()
   "Return the directory holding static web assets (`web/' under the eclaw repo)."
@@ -148,6 +152,18 @@ from a scratch buffer with a surprising `default-directory')."
       (json-error
        (signal 'error (list "invalid JSON" (error-message-string json-err)))))))
 
+(defun eclaw-web--parse-json-body-string-keys (body)
+  "Parse JSON BODY into an alist with string keys."
+  (unless (and body (not (string-empty-p body)))
+    (error "empty request body"))
+  (let ((json-object-type 'alist)
+        (json-array-type 'list)
+        (json-key-type 'string))
+    (condition-case json-err
+        (json-read-from-string body)
+      (json-error
+       (signal 'error (list "invalid JSON" (error-message-string json-err)))))))
+
 (defun eclaw-web--append-transcript (prompt reply)
   "Append a user/assistant exchange to `*eclaw*' when possible."
   (let ((buf (get-buffer-create "*eclaw*")))
@@ -202,6 +218,64 @@ from a scratch buffer with a surprising `default-directory')."
      `((messages . ,(eclaw-conversation-display-messages))
        (usage . ,(eclaw-usage-stats))))))
 
+(defun eclaw-web--tool-policy-json ()
+  "Return tool policy rows as JSON-friendly alists with string keys."
+  (mapcar
+   (lambda (row)
+     `(("name" . ,(plist-get row 'name))
+       ("description" . ,(plist-get row 'description))
+       ("risk" . ,(plist-get row 'risk))
+       ("enabled" . ,(plist-get row 'enabled))))
+   (eclaw-tool-policy-list)))
+
+(defun eclaw-web--settings-response-alist ()
+  "Return settings payload alist for JSON encoding."
+  `(("tools" . ,(vconcat (eclaw-web--tool-policy-json)))
+    ("policy_file" . ,(eclaw--tool-policy-file))))
+
+(defun eclaw-web--parse-tool-policy-updates (tools-alist)
+  "Return alist of tool-name string to boolean from JSON `tools' object."
+  (unless (listp tools-alist)
+    (error "settings body requires object \"tools\""))
+  (let (updates)
+    (dolist (pair tools-alist)
+      (unless (stringp (car pair))
+        (error "invalid tool name in settings update"))
+      (let ((enabled (cdr pair)))
+        (unless (member enabled '(t nil))
+          (error "tool %S enabled value must be boolean" (car pair)))
+        (push (cons (car pair) enabled) updates)))
+    (nreverse updates)))
+
+(defun eclaw-web--handle-get-settings (request)
+  (with-slots (process) request
+    (eclaw-web--json-response process 200 (eclaw-web--settings-response-alist))))
+
+(defun eclaw-web--handle-patch-settings (request)
+  (with-slots (process body) request
+    (condition-case err
+        (let* ((data (eclaw-web--parse-json-body-string-keys body))
+               (tools-obj (alist-get "tools" data)))
+          (if tools-obj
+              (progn
+                (eclaw-web--with-web-context
+                 (lambda ()
+                   (eclaw-tool-policy-apply-updates
+                    (eclaw-web--parse-tool-policy-updates tools-obj))))
+                (eclaw-web--json-response
+                 process 200 (eclaw-web--settings-response-alist)))
+            (eclaw-web--json-response
+             process 400
+             '(("error" . "missing \"tools\" object in request body")))))
+      (error
+       (eclaw-web--json-response
+        process 400
+        `(("error" . ,(error-message-string err))))))))
+
+(defun eclaw-web--handle-post-settings (request)
+  "Alias POST /api/settings to the PATCH handler for clients without PATCH."
+  (eclaw-web--handle-patch-settings request))
+
 (defun eclaw-web--handle-post-reset (request)
   (with-slots (process) request
     (eclaw-web--with-web-context #'eclaw-reset-conversation)
@@ -211,7 +285,8 @@ from a scratch buffer with a surprising `default-directory')."
 (defun eclaw-web--handle-request (request)
   "Route REQUEST to the appropriate handler."
   (let ((get-path (eclaw-web--request-path request :GET))
-        (post-path (eclaw-web--request-path request :POST)))
+        (post-path (eclaw-web--request-path request :POST))
+        (patch-path (eclaw-web--request-path request :PATCH)))
     (cond
      ((and get-path (string= get-path "/"))
       (eclaw-web--handle-get-index request))
@@ -219,10 +294,16 @@ from a scratch buffer with a surprising `default-directory')."
       (eclaw-web--handle-get-stats request))
      ((and get-path (string= get-path "/api/conversation"))
       (eclaw-web--handle-get-conversation request))
+     ((and get-path (string= get-path "/api/settings"))
+      (eclaw-web--handle-get-settings request))
      ((and post-path (string= post-path "/api/chat"))
       (eclaw-web--handle-post-chat request))
      ((and post-path (string= post-path "/api/reset"))
       (eclaw-web--handle-post-reset request))
+     ((and post-path (string= post-path "/api/settings"))
+      (eclaw-web--handle-post-settings request))
+     ((and patch-path (string= patch-path "/api/settings"))
+      (eclaw-web--handle-patch-settings request))
      (t (ws-send-404 (ws-process request))))))
 
 ;;;###autoload

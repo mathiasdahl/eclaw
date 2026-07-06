@@ -58,6 +58,7 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - Dispatch: `eclaw--dispatch-one-tool-call`, `eclaw--tool-result-messages` (**`eclaw-tools.el`**)
 - Multi-tool per turn; multi-round loop in `eclaw-chat`
 - Toggle tools in requests: `eclaw-tools-enabled`
+- **Tool policy:** per-tool enable matrix in `<eclaw-folder>/tool-policy.el`; filters `eclaw-tool-definitions` and dispatch; web UI via `GET/PATCH /api/settings` — see [`docs/tool-policy.md`](docs/tool-policy.md)
 - Safety caps: `eclaw-max-completions-per-prompt`, `eclaw-max-tokens-per-prompt`
 
 ## Registered tools
@@ -77,8 +78,22 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 | `send_email` | Send email to configured work or home address only (`mailme-mail` backend) | `:write` |
 | `notes_write_text` | `.txt` only under `<eclaw-folder>/notes/` | `:write` |
 | `skill_write` | `<eclaw-folder>/skills/<dir>/SKILL.md` only | `:write` |
+| `eval_elisp` | Full Elisp eval in running Emacs; disabled by default via tool policy | `:dangerous` |
 
-## Search tools (Milestone 1c)
+## Runtime eval (Milestone — done)
+
+- **`eval_elisp`:** `(eval form t)` in the running session; timeout and code-length caps; **disabled by default** in `tool-policy.el`
+- **Module:** **`eclaw-eval.el`**; `:dangerous` risk (gated under `writes` / `all` approval modes)
+- **Config:** `eclaw-eval-timeout-seconds` (30), `eclaw-eval-max-code-length` (32768)
+- **Smoke:** `scripts/smoke/eval-elisp.el` — policy off/on, `(+ 1 2)` → `result=3`
+
+## Tool policy (Milestone — done)
+
+- **File:** `<eclaw-folder>/tool-policy.el` — `(tool-name . enabled)` alist
+- **API:** `eclaw-tool-policy-enabled-p`, `eclaw-tool-policy-set`, `eclaw-tool-policy-apply-updates`, `eclaw-tool-policy-list`
+- **Defaults:** all tools enabled except `eval_elisp`; `web_search`/`web_fetch`/`send_email` seeded from module `defcustom`s on first use
+- **Web:** `GET/PATCH/POST /api/settings` in **`eclaw-web.el`**; settings panel in **`web/chat.html`**
+- **Docs:** [`docs/tool-policy.md`](docs/tool-policy.md)
 
 - **`glob_files`:** ripgrep `--files` with glob pattern; paths sorted by mtime (newest first); requires `rg`
 - **`grep_files`:** ripgrep regex (GNU grep fallback for content / files_with_matches / count only); default `output_mode: files_with_matches`; respects `.gitignore` unless `include_ignored: true`
@@ -455,7 +470,6 @@ See also [`notes/tool-discussion.txt`](notes/tool-discussion.txt).
 
 | Tool | Why deferred |
 |------|--------------|
-| `eval_elisp` | Cannot guarantee read-only; hooks and `require` have side effects |
 | `shell_run` | High risk; needs timeout/blocklist |
 | `kill_ring_read` / `kill_ring_write` | Editing bridge, not introspection |
 | `git_log` / `git_diff` | Valuable but external-process scope |
@@ -593,7 +607,10 @@ emacs-web-server on `127.0.0.1` (default port 9876):
 
 - `GET /` — chat page; `POST /api/chat` — JSON in/out, calls `eclaw-chat`
 - `GET /api/stats` — token usage JSON (last turn, conversation, Emacs lifetime + start time)
+- `GET /api/settings` — per-tool policy (name, description, risk, enabled)
+- `PATCH /api/settings` (or `POST`) — update tool policy from JSON `{ tools: { ... } }`
 - `POST /api/reset` — `eclaw-reset-conversation`
+- Tool policy panel in **`web/chat.html`** (checkboxes by risk; confirm dialog for dangerous tools)
 - Token stats bar in the browser: input/output counts for last turn, current chat (since reset), and cumulative since Emacs start; `/api/chat` and `/api/reset` also return `usage` in the JSON body
 - `M-x eclaw-web-start` / `eclaw-web-stop` / `eclaw-web-open`
 - Shares global `eclaw-conversation` with `*eclaw*`; tool approval `off` in web handler

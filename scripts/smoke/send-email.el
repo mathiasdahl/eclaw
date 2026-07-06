@@ -17,11 +17,15 @@
                (featurep 'eclaw-mail))
 
 (when eclaw-mail-enabled
-  (smoke--assert "send_email registered"
-                 (gethash "send_email" eclaw--tool-registry))
-  (let ((info (gethash "send_email" eclaw--tool-registry)))
-    (smoke--assert "send_email tagged :write"
-                   (eq (plist-get info :risk) :write))))
+  (smoke--assert "send_email enabled in policy by default"
+                 (eclaw-tool-policy-enabled-p "send_email")))
+
+(smoke--assert "send_email registered"
+               (gethash "send_email" eclaw--tool-registry))
+
+(let ((info (gethash "send_email" eclaw--tool-registry)))
+  (smoke--assert "send_email tagged :write"
+                 (eq (plist-get info :risk) :write)))
 
 (smoke--assert "invalid recipient rejected"
                (string-match-p "recipient must be work or home"

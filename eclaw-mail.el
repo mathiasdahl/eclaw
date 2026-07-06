@@ -156,8 +156,7 @@ SUBJECT and BODY are plain text.  Return a status string."
                       (alist-get 'body args)))
    :write))
 
-(when eclaw-mail-enabled
-  (eclaw-mail--register-send-email-tool))
+(eclaw-mail--register-send-email-tool)
 
 (provide 'eclaw-mail)
 ;;; eclaw-mail.el ends here

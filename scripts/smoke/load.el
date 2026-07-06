@@ -14,13 +14,24 @@
 (unless (featurep 'eclaw-mail)
   (error "smoke load: eclaw-mail feature missing"))
 
+(unless (featurep 'eclaw-eval)
+  (error "smoke load: eclaw-eval feature missing"))
+
 (unless (fboundp 'eclaw-chat)
   (error "smoke load: eclaw-chat not bound"))
 
-(when eclaw-web-search-enabled
-  (unless (gethash "web_search" eclaw--tool-registry)
-    (error "smoke load: web_search tool not registered"))
-  (unless (gethash "web_fetch" eclaw--tool-registry)
-    (error "smoke load: web_fetch tool not registered")))
+(unless (gethash "web_search" eclaw--tool-registry)
+  (error "smoke load: web_search tool not registered"))
+(unless (gethash "web_fetch" eclaw--tool-registry)
+  (error "smoke load: web_fetch tool not registered"))
+
+(unless (gethash "send_email" eclaw--tool-registry)
+  (error "smoke load: send_email tool not registered"))
+
+(unless (gethash "eval_elisp" eclaw--tool-registry)
+  (error "smoke load: eval_elisp tool not registered"))
+
+(unless (not (eclaw-tool-policy-enabled-p "eval_elisp"))
+  (error "smoke load: eval_elisp should be disabled by default"))
 
 (message "smoke load: OK")
