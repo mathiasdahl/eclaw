@@ -273,6 +273,12 @@ correctly.  Leave empty when the app is mounted at the site root."
   "Return settings payload alist for JSON encoding."
   `(("tools" . ,(vconcat (eclaw-web--tool-policy-json)))
     ("policy_file" . ,(eclaw--tool-policy-file))))
+(defun eclaw-web--json-bool (value)
+  "Normalize JSON boolean VALUE to Emacs t/nil."
+  (cond ((eq value :json-false) nil)
+        ((eq value :json-true) t)
+        (t value)))
+
 
 (defun eclaw-web--parse-tool-policy-updates (tools-alist)
   "Return alist of tool-name string to boolean from JSON `tools' object."
@@ -282,11 +288,12 @@ correctly.  Leave empty when the app is mounted at the site root."
     (dolist (pair tools-alist)
       (unless (stringp (car pair))
         (error "invalid tool name in settings update"))
-      (let ((enabled (cdr pair)))
+      (let ((enabled (eclaw-web--json-bool (cdr pair))))
         (unless (member enabled '(t nil))
           (error "tool %S enabled value must be boolean" (car pair)))
         (push (cons (car pair) enabled) updates)))
     (nreverse updates)))
+
 
 (defun eclaw-web--handle-get-settings (request)
   (with-slots (process) request
@@ -296,9 +303,9 @@ correctly.  Leave empty when the app is mounted at the site root."
   (with-slots (process body) request
     (condition-case err
         (let* ((data (eclaw-web--parse-json-body-string-keys body))
-               (tools-obj (alist-get "tools" data)))
-          (if tools-obj
-              (progn
+               (tools-entry (assoc-string "tools" data)))
+          (if tools-entry
+              (let ((tools-obj (or (cdr tools-entry) '())))
                 (eclaw-web--with-web-context
                  (lambda ()
                    (eclaw-tool-policy-apply-updates
@@ -312,6 +319,7 @@ correctly.  Leave empty when the app is mounted at the site root."
        (eclaw-web--json-response
         process 400
         `(("error" . ,(error-message-string err))))))))
+
 
 (defun eclaw-web--handle-post-settings (request)
   "Alias POST /api/settings to the PATCH handler for clients without PATCH."
