@@ -59,12 +59,12 @@ message so the model can answer time-sensitive questions and web searches with
 the correct year. The value is frozen until `M-x eclaw-reset-conversation`.
 See [`docs/session-context.md`](docs/session-context.md).
 
-Smoke-test (optional):
+Smoke-test (optional). Full workflow: [`docs/elisp-validation.md`](docs/elisp-validation.md).
 
 ```bash
-emacs -batch -Q -L /path/to/eclaw -f batch-byte-compile \
-  eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw.el
-emacs -batch -Q -L /path/to/eclaw --eval "(require 'eclaw)"
+scripts/eclaw-validate-elisp.sh --compile
+scripts/eclaw-validate-elisp.sh --require
+scripts/eclaw-validate-elisp.sh --smoke load
 ```
 
 ## Headless batch scripts
@@ -116,7 +116,7 @@ ECLAW_PROMPT='Summarize README.md' emacs -batch -Q -l ~/eclaw-headless.el
 In the script, `(getenv "ECLAW_PROMPT")` reads the variable;
 `(car command-line-args-left)` is the first argument after the script name.
 
-Project validation wrapper (uses the personal `elisp-editing` skill scripts):
+Project validation wrapper (see [`docs/elisp-validation.md`](docs/elisp-validation.md)):
 
 ```bash
 scripts/eclaw-validate-elisp.sh --all eclaw-tools.el

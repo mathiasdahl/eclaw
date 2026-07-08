@@ -21,7 +21,7 @@ Primary goals:
 Current model backend:
 
 - OpenRouter API
-- model: `deepseek/deepseek-v4-flash` (`eclaw-model`)
+- model: `deepseek/deepseek-v4-flash:nitro` (`eclaw-model`; list in `eclaw-available-models`)
 
 Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650; orchestration spine), **`eclaw-tools.el`** (~1,080; registry and handlers), **`eclaw-skills.el`** (~200), **`eclaw-http.el`** (~200), **`eclaw-web-search.el`** (~250). Load with `(require 'eclaw)` only — see **Source file layout** below.
 

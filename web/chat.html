@@ -476,13 +476,27 @@
       font-family: var(--font);
     }
 
-    #theme-select {
+    #theme-select,
+    #model-select {
       font: inherit;
       padding: 0.45rem 0.65rem;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border-strong);
       background: var(--btn-bg);
       color: var(--text);
+    }
+
+    #model-select {
+      max-width: min(100%, 18rem);
+    }
+
+    .model-status {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+
+    .model-status.is-error {
+      color: var(--msg-error-text);
     }
 
     #settings-panel {
@@ -612,6 +626,9 @@
       <button type="button" id="reset">New conversation</button>
       <button type="button" id="load-session">Load session</button>
       <button type="button" id="settings-toggle">Settings</button>
+      <label class="theme-label" for="model-select">Model</label>
+      <select id="model-select" aria-label="Model"></select>
+      <span id="model-status" class="model-status" aria-live="polite"></span>
       <label class="theme-label" for="theme-select">Theme</label>
       <select id="theme-select" aria-label="Theme">
         <option value="default">Default</option>
@@ -647,6 +664,8 @@
     const resetBtn = document.getElementById("reset");
     const loadSessionBtn = document.getElementById("load-session");
     const settingsToggleBtn = document.getElementById("settings-toggle");
+    const modelSelect = document.getElementById("model-select");
+    const modelStatusEl = document.getElementById("model-status");
     const settingsPanel = document.getElementById("settings-panel");
     const settingsGroupsEl = document.getElementById("settings-groups");
     const settingsSaveBtn = document.getElementById("settings-save");
@@ -943,7 +962,102 @@
       loadSessionBtn.disabled = busy;
       settingsToggleBtn.disabled = busy;
       settingsSaveBtn.disabled = busy;
+      if (modelSelect) modelSelect.disabled = busy;
       promptEl.disabled = busy;
+    }
+
+    let modelLoaded = false;
+    let modelSaving = false;
+    let modelPrevious = null;
+
+    function normalizeModels(data) {
+      const raw = data && data.models;
+      if (!Array.isArray(raw)) {
+        return { models: [], model: null, error: "Missing models list." };
+      }
+      const models = raw.filter((m) => typeof m === "string" && m);
+      const model = typeof data.model === "string" ? data.model : null;
+      if (!models.length) {
+        return { models, model, error: "No models configured." };
+      }
+      return { models, model, error: null };
+    }
+
+    function renderModelSelect(models, selected) {
+      if (!modelSelect) return;
+      modelSelect.innerHTML = "";
+      for (const id of models) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = id;
+        if (id === selected) opt.selected = true;
+        modelSelect.appendChild(opt);
+      }
+      if (selected && models.includes(selected)) {
+        modelSelect.value = selected;
+      } else if (models.length) {
+        modelSelect.value = models[0];
+      }
+      modelPrevious = modelSelect.value;
+    }
+
+    function setModelStatus(message, isError) {
+      if (!modelStatusEl) return;
+      modelStatusEl.textContent = message || "";
+      modelStatusEl.classList.toggle("is-error", !!isError);
+    }
+
+    async function loadModelSettings(force) {
+      if (modelLoaded && !force) return;
+      try {
+        const { data } = await apiFetch("api/settings");
+        const { models, model, error } = normalizeModels(data);
+        if (error) {
+          setModelStatus(error, true);
+          return;
+        }
+        renderModelSelect(models, model);
+        modelLoaded = true;
+        setModelStatus("", false);
+      } catch (err) {
+        setModelStatus(String(err), true);
+      }
+    }
+
+    async function saveModelSelection(modelId, previous) {
+      if (modelSaving) return;
+      modelSaving = true;
+      setModelStatus("Saving…", false);
+      try {
+        const { data } = await apiFetch("api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelId }),
+        });
+        const { models, model, error } = normalizeModels(data);
+        if (error) {
+          if (previous != null && modelSelect) modelSelect.value = previous;
+          setModelStatus(error, true);
+          return;
+        }
+        renderModelSelect(models, model);
+        setModelStatus("", false);
+      } catch (err) {
+        if (previous != null && modelSelect) modelSelect.value = previous;
+        setModelStatus(String(err), true);
+      } finally {
+        modelSaving = false;
+      }
+    }
+
+    if (modelSelect) {
+      modelSelect.addEventListener("focus", () => {
+        modelPrevious = modelSelect.value;
+      });
+      modelSelect.addEventListener("change", () => {
+        const next = modelSelect.value;
+        saveModelSelection(next, modelPrevious);
+      });
     }
 
     const SETTINGS_GROUP_ORDER = ["read", "write", "dangerous"];
@@ -1241,6 +1355,7 @@
 
     fetchStats().catch(() => {});
     loadSession({ quiet: true }).catch(() => {});
+    loadModelSettings().catch(() => {});
   </script>
 </body>
 </html>

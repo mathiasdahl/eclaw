@@ -109,10 +109,6 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
       (error "API key not set (set OPENROUTER_API_KEY or `eclaw-api-key')"))
     k))
 
-(defvar eclaw-model
-  "deepseek/deepseek-v4-flash"
-  "Model identifier string passed as the `model' field of each request.")
-
 (defvar eclaw-system-prompt
   (concat
    "You are eclaw, a personal AI assistant. "
@@ -136,6 +132,35 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
 (defgroup eclaw nil
   "Personal AI assistant for Emacs (OpenRouter-backed orchestration runtime)."
   :group 'external)
+
+(defcustom eclaw-available-models
+  '("deepseek/deepseek-v4-flash"
+    "deepseek/deepseek-v4-flash:nitro"
+    "deepseek/deepseek-v4-pro")
+  "OpenRouter model IDs offered in the web UI model selector."
+  :type '(repeat string)
+  :group 'eclaw)
+
+(defcustom eclaw-model "deepseek/deepseek-v4-flash:nitro"
+  "Model identifier string passed as the `model' field of each request."
+  :type 'string
+  :group 'eclaw)
+
+(defun eclaw-normalize-model (&optional model-id)
+  "Return MODEL-ID if it is in `eclaw-available-models', else the first entry.
+MODEL-ID defaults to `eclaw-model'.  Signal an error if the list is empty."
+  (let ((id (or model-id eclaw-model)))
+    (when (null eclaw-available-models)
+      (error "`eclaw-available-models' is empty"))
+    (if (member id eclaw-available-models)
+        id
+      (car eclaw-available-models))))
+
+(defun eclaw-set-model (model-id)
+  "Set `eclaw-model' to MODEL-ID when it is in `eclaw-available-models'."
+  (unless (member model-id eclaw-available-models)
+    (error "Model %S is not in `eclaw-available-models'" model-id))
+  (setq eclaw-model model-id))
 
 (defcustom eclaw-debug nil
   "When non-nil, emit verbose eclaw progress in the echo area.

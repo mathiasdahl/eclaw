@@ -53,11 +53,13 @@ Bind to localhost only (`eclaw-web-host`, default `127.0.0.1`). Enabling dangero
 
 | Method | Path | Body | Response |
 |--------|------|------|----------|
-| `GET` | `/api/settings` | — | `{ tools: [{ name, description, risk, enabled }], policy_file }` |
-| `PATCH` | `/api/settings` | `{ tools: { "eval_elisp": true, ... } }` | same as GET |
+| `GET` | `/api/settings` | — | `{ tools: [{ name, description, risk, enabled }], policy_file, models, model }` |
+| `PATCH` | `/api/settings` | `{ tools: { "eval_elisp": true, ... } }` or `{ model: "deepseek/deepseek-v4-pro" }` or both | same as GET |
 | `POST` | `/api/settings` | same as PATCH | alias for clients without PATCH |
 
-The web UI sends the full `tools` map on save (all checkboxes), not just changed rows.
+`models` is the list from `eclaw-available-models` (Customize). `model` is the current OpenRouter model id (`eclaw-model`), normalized to an entry in that list when the configured value is not offered.
+
+The web UI sends the full `tools` map on save (all checkboxes), not just changed rows. The model toolbar dropdown saves immediately with `{ model: "..." }` only.
 
 ## `eval_elisp`
 

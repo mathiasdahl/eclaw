@@ -272,7 +272,9 @@ correctly.  Leave empty when the app is mounted at the site root."
 (defun eclaw-web--settings-response-alist ()
   "Return settings payload alist for JSON encoding."
   `(("tools" . ,(vconcat (eclaw-web--tool-policy-json)))
-    ("policy_file" . ,(eclaw--tool-policy-file))))
+    ("policy_file" . ,(eclaw--tool-policy-file))
+    ("models" . ,(vconcat eclaw-available-models))
+    ("model" . ,(eclaw-normalize-model eclaw-model))))
 (defun eclaw-web--json-bool (value)
   "Normalize JSON boolean VALUE to Emacs t/nil."
   (cond ((eq value :json-false) nil)
@@ -295,6 +297,15 @@ correctly.  Leave empty when the app is mounted at the site root."
     (nreverse updates)))
 
 
+(defun eclaw-web--parse-model-update (model-value)
+  "Return model id string from JSON `model' value."
+  (unless (stringp model-value)
+    (error "settings body requires string \"model\""))
+  (unless (not (string-empty-p model-value))
+    (error "settings body requires non-empty \"model\""))
+  model-value)
+
+
 (defun eclaw-web--handle-get-settings (request)
   (with-slots (process) request
     (eclaw-web--json-response process 200 (eclaw-web--settings-response-alist))))
@@ -303,18 +314,24 @@ correctly.  Leave empty when the app is mounted at the site root."
   (with-slots (process body) request
     (condition-case err
         (let* ((data (eclaw-web--parse-json-body-string-keys body))
-               (tools-entry (assoc-string "tools" data)))
-          (if tools-entry
-              (let ((tools-obj (or (cdr tools-entry) '())))
+               (tools-entry (assoc-string "tools" data))
+               (model-entry (assoc-string "model" data)))
+          (if (or tools-entry model-entry)
+              (progn
                 (eclaw-web--with-web-context
                  (lambda ()
-                   (eclaw-tool-policy-apply-updates
-                    (eclaw-web--parse-tool-policy-updates tools-obj))))
+                   (when model-entry
+                     (eclaw-set-model
+                      (eclaw-web--parse-model-update (cdr model-entry))))
+                   (when tools-entry
+                     (let ((tools-obj (or (cdr tools-entry) '())))
+                       (eclaw-tool-policy-apply-updates
+                        (eclaw-web--parse-tool-policy-updates tools-obj))))))
                 (eclaw-web--json-response
                  process 200 (eclaw-web--settings-response-alist)))
             (eclaw-web--json-response
              process 400
-             '(("error" . "missing \"tools\" object in request body")))))
+             '(("error" . "missing \"tools\" or \"model\" in request body")))))
       (error
        (eclaw-web--json-response
         process 400

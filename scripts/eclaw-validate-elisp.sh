@@ -99,7 +99,7 @@ case "$action" in
     ;;
   --compile)
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw.el
+      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
     ;;
   --require)
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
@@ -112,7 +112,7 @@ case "$action" in
     [[ $# -ge 1 ]] || { echo "--all requires at least one FILE" >&2; exit 2; }
     "$VALIDATE" --parens "$@"
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw.el
+      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
     ;;
   -h|--help)

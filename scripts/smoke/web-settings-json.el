@@ -43,6 +43,19 @@
          (tools-entry (assoc-string "tools" data)))
     (when tools-entry (or (cdr tools-entry) '()))))
 
+(defun smoke--settings-model-from-body (body)
+  "Mirror model extraction from `eclaw-web--handle-patch-settings'."
+  (let* ((data (json-read-from-string body))
+         (model-entry (assoc-string "model" data)))
+    (when model-entry (cdr model-entry))))
+
+(defun smoke--settings-response-alist ()
+  "Mirror `eclaw-web--settings-response-alist' without web-server."
+  `(("tools" . ,(vconcat (smoke--tool-policy-json)))
+    ("policy_file" . ,(expand-file-name "tool-policy.el" eclaw-folder))
+    ("models" . ,(vconcat eclaw-available-models))
+    ("model" . ,(eclaw-normalize-model eclaw-model))))
+
 (let* ((tmpdir (make-temp-file "eclaw-smoke-settings-" t))
        (json-object-type 'alist)
        (json-array-type 'list)
@@ -51,14 +64,19 @@
   (setq eclaw--tool-policy-loaded nil)
   (setq eclaw--tool-policy nil)
 
-  (let* ((payload `(("tools" . ,(vconcat (smoke--tool-policy-json)))
-                    ("policy_file" . ,(expand-file-name "tool-policy.el" tmpdir))))
+  (let* ((payload (smoke--settings-response-alist))
          (encoded (json-read-from-string (json-encode payload)))
-         (tools (cdr (assoc-string "tools" encoded))))
+         (tools (cdr (assoc-string "tools" encoded)))
+         (models (cdr (assoc-string "models" encoded)))
+         (model (cdr (assoc-string "model" encoded))))
     (smoke--assert "tools is a list"
                    (listp tools))
     (smoke--assert "tools is non-empty"
                    (> (length tools) 0))
+    (smoke--assert "models is a non-empty list"
+                   (and (listp models) (> (length models) 0)))
+    (smoke--assert "model is a string in models"
+                   (and (stringp model) (member model models)))
     (let* ((first (car tools))
            (name (cdr (assoc-string "name" first)))
            (risk (cdr (assoc-string "risk" first)))
@@ -76,6 +94,14 @@
     (smoke--assert "PATCH body exposes tools object"
                    (listp tools-obj))
     (smoke--assert "PATCH body parses eval_elisp disabled"
-                   (equal updates '(("eval_elisp" . nil))))))
+                   (equal updates '(("eval_elisp" . nil)))))
+
+  (let* ((body "{\"model\":\"deepseek/deepseek-v4-pro\"}")
+         (model-id (smoke--settings-model-from-body body)))
+    (smoke--assert "PATCH body exposes model string"
+                   (stringp model-id))
+    (eclaw-set-model model-id)
+    (smoke--assert "model update applies to eclaw-model"
+                   (string= eclaw-model "deepseek/deepseek-v4-pro"))))
 
 (message "smoke web-settings-json: OK")
