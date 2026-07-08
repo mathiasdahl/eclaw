@@ -460,10 +460,19 @@
       padding: 0.45rem 0.55rem;
     }
 
-    .toolbar-icon {
+    .toolbar-icon,
+    .toolbar-glyph {
       width: 1.1em;
       height: 1.1em;
       flex-shrink: 0;
+    }
+
+    .toolbar-glyph {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1em;
+      line-height: 1;
     }
 
     .theme-label {
@@ -650,10 +659,7 @@
         </svg>
       </button>
       <button type="button" id="settings-toggle" class="toolbar-btn-icon" aria-label="Settings" title="Settings">
-        <svg class="toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-        </svg>
+        <span class="toolbar-glyph" aria-hidden="true">⚙</span>
       </button>
       <label class="theme-label" for="model-select">Model</label>
       <select id="model-select" aria-label="Model"></select>
