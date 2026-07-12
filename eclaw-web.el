@@ -274,7 +274,9 @@ correctly.  Leave empty when the app is mounted at the site root."
   `(("tools" . ,(vconcat (eclaw-web--tool-policy-json)))
     ("policy_file" . ,(eclaw--tool-policy-file))
     ("models" . ,(vconcat eclaw-available-models))
-    ("model" . ,(eclaw-normalize-model eclaw-model))))
+    ("model" . ,(eclaw-normalize-model eclaw-model))
+    ("max_tokens_per_prompt" . ,eclaw-max-tokens-per-prompt)
+    ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)))
 (defun eclaw-web--json-bool (value)
   "Normalize JSON boolean VALUE to Emacs t/nil."
   (cond ((eq value :json-false) nil)
@@ -306,6 +308,20 @@ correctly.  Leave empty when the app is mounted at the site root."
   model-value)
 
 
+(defun eclaw-web--parse-positive-integer (value field-name)
+  "Return positive integer VALUE for settings field FIELD-NAME."
+  (let ((n (cond
+            ((integerp value) value)
+            ((and (numberp value) (= value (truncate value)))
+             (truncate value))
+            ((and (stringp value) (string-match-p "\\`[0-9]+\\'" value))
+             (string-to-number value))
+            (t (error "%s must be a positive integer" field-name)))))
+    (unless (> n 0)
+      (error "%s must be a positive integer" field-name))
+    n))
+
+
 (defun eclaw-web--handle-get-settings (request)
   (with-slots (process) request
     (eclaw-web--json-response process 200 (eclaw-web--settings-response-alist))))
@@ -315,14 +331,25 @@ correctly.  Leave empty when the app is mounted at the site root."
     (condition-case err
         (let* ((data (eclaw-web--parse-json-body-string-keys body))
                (tools-entry (assoc-string "tools" data))
-               (model-entry (assoc-string "model" data)))
-          (if (or tools-entry model-entry)
+               (model-entry (assoc-string "model" data))
+               (max-tokens-entry (assoc-string "max_tokens_per_prompt" data))
+               (max-completions-entry (assoc-string "max_completions_per_prompt" data)))
+          (if (or tools-entry model-entry max-tokens-entry max-completions-entry)
               (progn
                 (eclaw-web--with-web-context
                  (lambda ()
                    (when model-entry
                      (eclaw-set-model
                       (eclaw-web--parse-model-update (cdr model-entry))))
+                   (when max-tokens-entry
+                     (setq eclaw-max-tokens-per-prompt
+                           (eclaw-web--parse-positive-integer
+                            (cdr max-tokens-entry) "max_tokens_per_prompt")))
+                   (when max-completions-entry
+                     (setq eclaw-max-completions-per-prompt
+                           (eclaw-web--parse-positive-integer
+                            (cdr max-completions-entry)
+                            "max_completions_per_prompt")))
                    (when tools-entry
                      (let ((tools-obj (or (cdr tools-entry) '())))
                        (eclaw-tool-policy-apply-updates
@@ -331,7 +358,7 @@ correctly.  Leave empty when the app is mounted at the site root."
                  process 200 (eclaw-web--settings-response-alist)))
             (eclaw-web--json-response
              process 400
-             '(("error" . "missing \"tools\" or \"model\" in request body")))))
+             '(("error" . "missing settings field in request body")))))
       (error
        (eclaw-web--json-response
         process 400

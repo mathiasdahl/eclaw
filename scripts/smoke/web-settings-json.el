@@ -37,6 +37,19 @@
         (push (cons (car pair) enabled) updates)))
     (nreverse updates)))
 
+(defun smoke--parse-positive-integer (value field-name)
+  "Mirror `eclaw-web--parse-positive-integer'."
+  (let ((n (cond
+            ((integerp value) value)
+            ((and (numberp value) (= value (truncate value)))
+             (truncate value))
+            ((and (stringp value) (string-match-p "\\`[0-9]+\\'" value))
+             (string-to-number value))
+            (t (error "%s must be a positive integer" field-name)))))
+    (unless (> n 0)
+      (error "%s must be a positive integer" field-name))
+    n))
+
 (defun smoke--settings-tools-from-body (body)
   "Mirror tools extraction from `eclaw-web--handle-patch-settings'."
   (let* ((data (json-read-from-string body))
@@ -49,12 +62,26 @@
          (model-entry (assoc-string "model" data)))
     (when model-entry (cdr model-entry))))
 
+(defun smoke--settings-max-tokens-from-body (body)
+  "Mirror max_tokens_per_prompt extraction from PATCH settings body."
+  (let* ((data (json-read-from-string body))
+         (entry (assoc-string "max_tokens_per_prompt" data)))
+    (when entry (cdr entry))))
+
+(defun smoke--settings-max-completions-from-body (body)
+  "Mirror max_completions_per_prompt extraction from PATCH settings body."
+  (let* ((data (json-read-from-string body))
+         (entry (assoc-string "max_completions_per_prompt" data)))
+    (when entry (cdr entry))))
+
 (defun smoke--settings-response-alist ()
   "Mirror `eclaw-web--settings-response-alist' without web-server."
   `(("tools" . ,(vconcat (smoke--tool-policy-json)))
     ("policy_file" . ,(expand-file-name "tool-policy.el" eclaw-folder))
     ("models" . ,(vconcat eclaw-available-models))
-    ("model" . ,(eclaw-normalize-model eclaw-model))))
+    ("model" . ,(eclaw-normalize-model eclaw-model))
+    ("max_tokens_per_prompt" . ,eclaw-max-tokens-per-prompt)
+    ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)))
 
 (let* ((tmpdir (make-temp-file "eclaw-smoke-settings-" t))
        (json-object-type 'alist)
@@ -68,7 +95,9 @@
          (encoded (json-read-from-string (json-encode payload)))
          (tools (cdr (assoc-string "tools" encoded)))
          (models (cdr (assoc-string "models" encoded)))
-         (model (cdr (assoc-string "model" encoded))))
+         (model (cdr (assoc-string "model" encoded)))
+         (max-tokens (cdr (assoc-string "max_tokens_per_prompt" encoded)))
+         (max-completions (cdr (assoc-string "max_completions_per_prompt" encoded))))
     (smoke--assert "tools is a list"
                    (listp tools))
     (smoke--assert "tools is non-empty"
@@ -77,6 +106,10 @@
                    (and (listp models) (> (length models) 0)))
     (smoke--assert "model is a string in models"
                    (and (stringp model) (member model models)))
+    (smoke--assert "max_tokens_per_prompt is positive integer"
+                   (and (integerp max-tokens) (> max-tokens 0)))
+    (smoke--assert "max_completions_per_prompt is positive integer"
+                   (and (integerp max-completions) (> max-completions 0)))
     (let* ((first (car tools))
            (name (cdr (assoc-string "name" first)))
            (risk (cdr (assoc-string "risk" first)))
@@ -102,6 +135,22 @@
                    (stringp model-id))
     (eclaw-set-model model-id)
     (smoke--assert "model update applies to eclaw-model"
-                   (string= eclaw-model "deepseek/deepseek-v4-pro"))))
+                   (string= eclaw-model "deepseek/deepseek-v4-pro")))
+
+  (let* ((body "{\"max_tokens_per_prompt\":50000,\"max_completions_per_prompt\":8}")
+         (max-tokens (smoke--settings-max-tokens-from-body body))
+         (max-completions (smoke--settings-max-completions-from-body body)))
+    (smoke--assert "PATCH body exposes max_tokens_per_prompt"
+                   (= max-tokens 50000))
+    (smoke--assert "PATCH body exposes max_completions_per_prompt"
+                   (= max-completions 8))
+    (setq eclaw-max-tokens-per-prompt
+          (smoke--parse-positive-integer max-tokens "max_tokens_per_prompt"))
+    (setq eclaw-max-completions-per-prompt
+          (smoke--parse-positive-integer max-completions "max_completions_per_prompt"))
+    (smoke--assert "prompt limit update applies to eclaw-max-tokens-per-prompt"
+                   (= eclaw-max-tokens-per-prompt 50000))
+    (smoke--assert "prompt limit update applies to eclaw-max-completions-per-prompt"
+                   (= eclaw-max-completions-per-prompt 8)))
 
 (message "smoke web-settings-json: OK")
