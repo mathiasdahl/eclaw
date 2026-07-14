@@ -122,7 +122,8 @@ scripts/eclaw-validate-elisp.sh --smoke NAME
 | `send-email` | Recipient enum, offline `mailme-mail` stub |
 | `eval-elisp` | Tool policy gating, safety modes, eval handler |
 | `web-settings-json` | Settings API JSON shape (offline; no web server) |
-| `session-context` | Session-start timestamp in system message |
+| `session-context` | Session-start date (no time) in system message |
+| `get-datetime` | `get_datetime` tool output |
 | `progress-timestamp` | Progress / logging timestamps |
 
 Run only the smokes relevant to your change, plus `load` as a baseline.

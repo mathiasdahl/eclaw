@@ -44,7 +44,7 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - **Canonical execution trace:** `eclaw-conversation` holds user, assistant (with optional `tool_calls`), and tool messages—no system row
 - **Per-turn flow:** append user message → `eclaw-build-messages` → loop completions until plain assistant reply or a cap fires
 - **Message builders:** `eclaw-system-message`, `eclaw-user-message`, `eclaw-assistant-message`, `eclaw-tool-message`
-- **System prompt:** `eclaw-system-prompt` (global persona and cross-cutting rules only) plus optional agent skills index block plus **session context block** (session-start date/time frozen for the chat session; see [`docs/session-context.md`](docs/session-context.md)). Per-tool purpose, constraints, and workflow live in `eclaw-deftool` descriptions (API `tools` array), not duplicated in the system prompt.
+- **System prompt:** `eclaw-system-prompt` (global persona and cross-cutting rules only) plus optional agent skills index block plus **session context block** (session-start date only, frozen for the chat session; wall-clock time via `get_datetime`; see [`docs/session-context.md`](docs/session-context.md)). Per-tool purpose, constraints, and workflow live in `eclaw-deftool` descriptions (API `tools` array), not duplicated in the system prompt.
 - **Session start:** `eclaw--ensure-session-started` in `eclaw-chat` sets `eclaw--session-started` on first turn; cleared by `eclaw-reset-conversation`
 - **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`, `eclaw-save-conversation`, `eclaw-list-conversations`, `eclaw-open-conversation`
 
@@ -68,6 +68,7 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 | `read_file` | Read file text with optional `offset`/`limit` line range; sensitive-path policy; default 250-line cap | `:read` |
 | `buffer_read` | Read live Emacs buffer text (unsaved content); optional `offset`/`limit`; buffer deny list + sensitive file policy | `:read` |
 | `emacs_context` | Session orientation: Emacs version, current buffer metadata, open buffer list; sensitive buffers omitted from listing | `:read` |
+| `get_datetime` | Current wall-clock date/time; session date is in system message | `:read` |
 | `describe_symbol` | Programmatic `C-h f` / `C-h v` / key lookup; documentation and arglist only (no variable values) | `:read` |
 | `apropos` | Search symbols by regexp; one-line doc summaries only (no values) | `:read` |
 | `list_directory` | Bounded directory listing (one level; not a glob search) | `:read` |

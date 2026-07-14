@@ -42,6 +42,9 @@ run_smoke() {
     session-context)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/session-context.el"
       ;;
+    get-datetime)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/get-datetime.el"
+      ;;
     progress-timestamp)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/progress-timestamp.el"
       ;;
@@ -65,7 +68,7 @@ run_smoke() {
       ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json" >&2
+      echo "Known: read-file, load, web-search, session-context, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json" >&2
       exit 2
       ;;
   esac

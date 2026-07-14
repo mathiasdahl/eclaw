@@ -54,9 +54,10 @@ session, or via a saved rule. See [`docs/tool-approval.md`](docs/tool-approval.m
 List or edit saved rules with `M-x eclaw-list-tool-approval-rules` and related
 commands. Set `eclaw-tool-approval-mode` to `writes` or `off` to relax gating.
 
-Each chat session injects the **session-start date and time** into the system
+Each chat session injects the **session-start date** (no time of day) into the system
 message so the model can answer time-sensitive questions and web searches with
-the correct year. The value is frozen until `M-x eclaw-reset-conversation`.
+the correct year. Wall-clock time is available via the `get_datetime` tool.
+The date is frozen until `M-x eclaw-reset-conversation`.
 See [`docs/session-context.md`](docs/session-context.md).
 
 Smoke-test (optional). Full workflow: [`docs/elisp-validation.md`](docs/elisp-validation.md).

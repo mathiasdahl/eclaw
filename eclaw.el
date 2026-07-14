@@ -120,7 +120,7 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "You are running inside Emacs. Tool descriptions and parameters define "
    "each capability. Filesystem tools are confined to `eclaw-folder'; "
    "introspection tools read the live Emacs session and are not path-confined. "
-   "Session start date/time is in the system context below. "
+   "Session date is in the system context below; call `get_datetime' for time of day. "
    "When asked for a plan/proposal/options first, present it and wait for "
    "explicit approval before acting.")
   "Text of the system role message prepended to every completion request.")
@@ -295,11 +295,11 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
     (setq eclaw--session-started (current-time))))
 
 (defun eclaw--session-context-block ()
-  "Return session-start date/time text for the system prompt, or \"\"."
+  "Return session-start date text for the system prompt, or \"\"."
   (if eclaw--session-started
-      (let ((stamp (format-time-string "%A, %Y-%m-%d %H:%M:%S %Z"
+      (let ((stamp (format-time-string "%A, %Y-%m-%d %Z"
                                      eclaw--session-started)))
-        (format "\n\nSession context: started %s.\nUse this date for time-sensitive queries and web search, not your training cutoff."
+        (format "\n\nSession context: today is %s.\nUse this date for time-sensitive queries and web search, not your training cutoff.\nCall get_datetime when you need the current time of day."
                 stamp))
     ""))
 
@@ -511,6 +511,22 @@ CONTENT may be nil; it is stored as an empty string."
 (require 'eclaw-web-search)
 (require 'eclaw-mail)
 (require 'eclaw-eval)
+
+(defun eclaw-tool-get-datetime ()
+  "Return current wall-clock time and session start for the model."
+  (let ((now (current-time)))
+    (concat
+     (format "now: %s\n"
+             (format-time-string "%A, %Y-%m-%d %H:%M:%S %Z" now))
+     (if eclaw--session-started
+         (format "session_started: %s\n"
+                 (eclaw--iso-timestamp eclaw--session-started))
+       ""))))
+
+(eclaw-deftool get_datetime
+  "Return the current wall-clock date and time. Session date is in the system message; call when time of day matters."
+  ()
+  (eclaw-tool-get-datetime))
 
 (defun eclaw-build-chat-payload (messages)
   "Return the JSON-serializable request alist for message list MESSAGES.

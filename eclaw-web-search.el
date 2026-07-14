@@ -315,7 +315,7 @@ Get a free key at https://jina.ai/?sui=apikey — required for `web_search'."
   (funcall (eclaw--ws-provider-fetch-fn eclaw-web-search-provider) url))
 
 (eclaw-deftool web_search
-  "Search the live web for current information. Returns numbered results with URLs and snippets."
+  "Search the live web for current information. Returns numbered results with URLs and snippets. Session date is in the system message; call get_datetime when time of day affects the query."
   ((query :string "Search query string.")
    (max_results :integer
                 "Maximum number of results (default 5; hard cap 10)."
