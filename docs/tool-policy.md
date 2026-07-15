@@ -37,7 +37,7 @@ Registry `:risk` values:
 | Risk | Examples | Approval under `writes` mode |
 |------|----------|------------------------------|
 | `:read` | `read_file`, `web_search` | Not gated |
-| `:write` | `notes_write_text`, `send_email` | Gated |
+| `:write` | `notes_write_text`, `preferences_append`, `send_email` | Gated |
 | `:dangerous` | `eval_elisp` | Gated (same as `:write`) |
 
 Under `all` mode, every tool is gated. Under `off`, nothing is gated by approval (policy still applies).

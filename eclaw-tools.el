@@ -35,6 +35,7 @@
 (require 'subr-x)
 (require 'seq)
 (require 'eclaw-skills)
+(require 'eclaw-preferences)
 
 (declare-function eclaw-message "eclaw" (format-string &rest args))
 (declare-function eclaw-debug-message "eclaw" (format-string &rest args))
@@ -76,7 +77,8 @@ you trust the workflow.
 `off' — run tools immediately (no prompts).
 
 `writes' — interactively approve each call to tools tagged `:write'
-          (`notes_write_text', `skill_write', …) or `:dangerous'
+          (`notes_write_text', `skill_write', `preferences_append',
+           `preferences_write', …) or `:dangerous'
           (`eval_elisp', …).
 
 `all' — interactively approve every registered tool before it runs."
@@ -390,6 +392,75 @@ DESCRIPTION is the one-line skills-index summary; CONTENT is the markdown body
                 (eclaw-debug-message "eclaw: skill_write updated %s" target)
                 (format "Skill saved as `skills/%s/SKILL.md` under `eclaw-folder'." skill-dir))
             (error (format "Error writing skill file %S: %S" target err))))))))))
+
+(defun eclaw--preferences-snippet-line (snippet)
+  "Normalize SNIPPET as one Markdown bullet line for `preferences.md'."
+  (let ((trimmed (string-trim (or snippet ""))))
+    (cond
+     ((string-empty-p trimmed)
+      nil)
+     ((string-prefix-p "- " trimmed)
+      trimmed)
+     (t
+      (concat "- " trimmed)))))
+
+(defun eclaw-tool-preferences-write (content)
+  "Replace `preferences.md' under `eclaw-folder' with CONTENT (UTF-8).
+Return a status string."
+  (let* ((text (or content ""))
+         (max eclaw-preferences-max-chars)
+         (root (eclaw--folder))
+         (target (eclaw--preferences-file)))
+    (cond
+     ((> (length text) max)
+      (format "Error: preferences content exceeds %d character limit (%d)."
+              max (length text)))
+     (t
+      (let* ((root-real (eclaw--canonical-path root))
+             (target-real (eclaw--canonical-path target)))
+        (cond
+         ((or (null root-real) (null target-real))
+          "Error: could not resolve preferences path.")
+         ((not (eclaw--canonical-under-directory-p target-real root-real))
+          "Error: preferences.md resolves outside `eclaw-folder'.")
+         (t
+          (condition-case err
+              (progn
+                (make-directory root 'parents)
+                (with-temp-buffer
+                  (set-buffer-file-coding-system 'utf-8-unix)
+                  (insert text)
+                  (write-region (point-min) (point-max) target nil 'nomessage))
+                (eclaw--invalidate-preferences-cache)
+                (eclaw-debug-message "eclaw: preferences_write updated %s" target)
+                "Preferences saved to `preferences.md` under `eclaw-folder'.")
+            (error (format "Error writing preferences file %S: %S" target err))))))))))
+
+(defun eclaw-tool-preferences-append (snippet)
+  "Append SNIPPET as a bullet line to `preferences.md' under `eclaw-folder'.
+Return a status string."
+  (let ((line (eclaw--preferences-snippet-line snippet)))
+    (cond
+     ((null line)
+      "Error: preferences_append requires non-empty snippet.")
+     (t
+      (let* ((target (eclaw--preferences-file))
+             (existing (when (file-regular-p target)
+                         (with-temp-buffer
+                           (insert-file-contents-literally target)
+                           (set-buffer-multibyte t)
+                           (buffer-string))))
+             (prefix (if (and existing (not (string-empty-p (string-trim existing))))
+                         (if (string-suffix-p "\n" existing)
+                             existing
+                           (concat existing "\n"))
+                       ""))
+             (new-content (concat prefix line "\n"))
+             (max eclaw-preferences-max-chars))
+        (if (> (length new-content) max)
+            (format "Error: preferences would exceed %d character limit (%d)."
+                    max (length new-content))
+          (eclaw-tool-preferences-write new-content)))))))
 
 (defun eclaw--json-truthy-p (value)
   "Non-nil when VALUE is not nil and not JSON false (`json-read' marker)."
@@ -2003,6 +2074,23 @@ Basename is prefixed with `YYYY-MM-DD_HHMMSS-` when that prefix is not already p
             "Error: skill_write requires \"content\" in arguments.")
         "Error: skill_write requires \"description\" in arguments.")
     "Error: skill_write requires \"skill_dir\" in arguments."))
+
+(eclaw-deftool preferences_append
+  "Append one short user preference snippet to `preferences.md` under `eclaw-folder`."
+  ((snippet :string
+             "One preference line; prefixed with `- ' automatically when missing."))
+  (:risk :write)
+  (if snippet
+      (eclaw-tool-preferences-append snippet)
+    "Error: preferences_append requires \"snippet\" in arguments."))
+
+(eclaw-deftool preferences_write
+  "Replace `preferences.md` under `eclaw-folder` with new content (UTF-8)."
+  ((content :string "Full file body for `preferences.md` (UTF-8)."))
+  (:risk :write)
+  (if content
+      (eclaw-tool-preferences-write content)
+    "Error: preferences_write requires \"content\" in arguments."))
 
 (defun eclaw--dispatch-one-tool-call (tool-call)
   "Execute the TOOL-CALL alist from the API; return the tool result string.

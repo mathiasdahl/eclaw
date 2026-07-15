@@ -42,6 +42,9 @@ run_smoke() {
     session-context)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/session-context.el"
       ;;
+    preferences)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/preferences.el"
+      ;;
     archive-utf8)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/archive-utf8.el"
       ;;
@@ -71,7 +74,7 @@ run_smoke() {
       ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context, archive-utf8, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json" >&2
+      echo "Known: read-file, load, web-search, session-context, preferences, archive-utf8, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json" >&2
       exit 2
       ;;
   esac
@@ -105,7 +108,7 @@ case "$action" in
     ;;
   --compile)
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
+      eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
     ;;
   --require)
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
@@ -118,7 +121,7 @@ case "$action" in
     [[ $# -ge 1 ]] || { echo "--all requires at least one FILE" >&2; exit 2; }
     "$VALIDATE" --parens "$@"
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
+      eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
     ;;
   -h|--help)

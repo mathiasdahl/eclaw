@@ -35,8 +35,9 @@
 ;; It maintains one global conversation as a list of request/response
 ;; messages and optionally advertises local project tools (`read_file',
 ;; `list_directory', `glob_files', `grep_files') guarded by a sensitive-path
-;; policy, plus narrow writes (`notes_write_text', `skill_write') limited to
-;; `notes/*.txt' and `skills/<name>/SKILL.md' under `eclaw-folder'.
+;; policy, plus narrow writes (`notes_write_text', `skill_write',
+;; `preferences_append', `preferences_write') limited to `notes/*.txt',
+;; `skills/<name>/SKILL.md', and `preferences.md' under `eclaw-folder'.
 ;; `glob_files' and `grep_files' use `eclaw-grep-program' (ripgrep preferred,
 ;; GNU grep fallback); search respects `.gitignore' by default.
 ;;
@@ -50,6 +51,7 @@
 ;;   eclaw.el         — this file: configuration, conversation, request assembly,
 ;;                      orchestration, logging, UI entrypoints
 ;;   eclaw-skills.el  — `skills/' index block for the system message
+;;   eclaw-preferences.el — `preferences.md' user memory block for the system message
 ;;   eclaw-tools.el   — `eclaw-deftool' registry, handlers, dispatch, sensitive-path
 ;;                      policy, search-tool backends
 ;;   eclaw-http.el    — OpenRouter POST and response accessors (see
@@ -58,7 +60,8 @@
 ;;   eclaw-mail.el      — `send_email' tool (work/home only via `mailme-mail')
 ;;   eclaw-eval.el      — `eval_elisp' tool (full session eval; policy-gated)
 ;;
-;; Load order in `eclaw.el': `(require 'eclaw-skills)' before conversation;
+;; Load order in `eclaw.el': `(require 'eclaw-skills)' and `(require 'eclaw-preferences)'
+;; before conversation;
 ;; `(require 'eclaw-tools)', `(require 'eclaw-http)', `(require 'eclaw-web-search)',
 ;; `(require 'eclaw-mail)', and `(require 'eclaw-eval)' before `eclaw-build-chat-payload' / `eclaw-chat'.
 ;;
@@ -121,11 +124,15 @@ Initialized from environment variable `OPENROUTER_API_KEY'; you may
    "each capability. Filesystem tools are confined to `eclaw-folder'; "
    "introspection tools read the live Emacs session and are not path-confined. "
    "Session date is in the system context below; call `get_datetime' for time of day. "
+   "When the user asks you to remember a preference, use `preferences_append'; "
+   "use `preferences_write' to replace the whole list. Stored preferences appear "
+   "in the system context below. "
    "When asked for a plan/proposal/options first, present it and wait for "
    "explicit approval before acting.")
   "Text of the system role message prepended to every completion request.")
 
 (require 'eclaw-skills)
+(require 'eclaw-preferences)
 
 ;;; Conversation and message alists
 
@@ -207,8 +214,9 @@ Normally off; eclaw emits its own progress via `eclaw-progress-message'."
   (expand-file-name "~/.eclaw/")
   "Root directory for all eclaw data.
 Conversation archives live in `conversations/', notes in `notes/', agent skills
-in `skills/', the JSONL log as `eclaw-log.jsonl', and tool-approval rules in
-`tool-approval-rules.el' — all relative to this directory."
+in `skills/', user preferences in `preferences.md', the JSONL log as
+`eclaw-log.jsonl', and tool-approval rules in `tool-approval-rules.el' — all
+relative to this directory."
   :type 'directory
   :group 'eclaw)
 
@@ -457,10 +465,12 @@ When archiving fails, the session is left unchanged."
 
 (defun eclaw-system-message ()
   "Return one system message alist using `eclaw-system-prompt'.
+When `preferences.md' exists under `eclaw-folder', append a user preferences block.
 When skills exist under `eclaw-folder'/`skills/', append an index-only skills section.
 When `eclaw--session-started' is set, append a frozen session context block."
   `((role . "system")
     (content . ,(concat eclaw-system-prompt
+                        (eclaw--preferences-system-block)
                         (eclaw--skills-system-block)
                         (eclaw--session-context-block)))))
 

@@ -9,8 +9,9 @@ Wall-clock time is available on demand via the `get_datetime` tool.
 `eclaw-system-message` builds the system role content as:
 
 1. `eclaw-system-prompt` (static instructions)
-2. Optional agent skills index (`eclaw--skills-system-block`)
-3. Session context block (`eclaw--session-context-block`)
+2. Optional user preferences block (`eclaw--preferences-system-block`)
+3. Optional agent skills index (`eclaw--skills-system-block`)
+4. Session context block (`eclaw--session-context-block`)
 
 The session block looks like:
 

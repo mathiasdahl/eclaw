@@ -79,6 +79,8 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 | `send_email` | Send email to configured work or home address only (`mailme-mail` backend) | `:write` |
 | `notes_write_text` | `.txt` only under `<eclaw-folder>/notes/` | `:write` |
 | `skill_write` | `<eclaw-folder>/skills/<dir>/SKILL.md` only | `:write` |
+| `preferences_append` | Append one bullet to `<eclaw-folder>/preferences.md` | `:write` |
+| `preferences_write` | Replace `<eclaw-folder>/preferences.md` | `:write` |
 | `eval_elisp` | Full Elisp eval in running Emacs; disabled by default via tool policy | `:dangerous` |
 
 ## Runtime eval (Milestone — done)
@@ -241,7 +243,7 @@ Tool result:
 - `eclaw-deftool` schema and optional parameters
 - Tool call parsing and dispatch
 - `read_file`, `list_directory`, `grep_files` with sensitive-path policy and caps
-- `notes_write_text`, `skill_write` with path sandboxing
+- `notes_write_text`, `skill_write`, `preferences_append`, `preferences_write` with path sandboxing
 - Tool result messages; multi-tool and multi-round loop with caps
 
 ## Milestone 1b — Agent skills ✓

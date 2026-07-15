@@ -71,7 +71,7 @@ scripts/eclaw-validate-elisp.sh --compile
 
 Compile order (dependency-safe):
 
-`eclaw-skills.el` → `eclaw-tools.el` → `eclaw-http.el` → `eclaw-web-search.el`
+`eclaw-skills.el` → `eclaw-preferences.el` → `eclaw-tools.el` → `eclaw-http.el` → `eclaw-web-search.el`
 → `eclaw-mail.el` → `eclaw-eval.el` → `eclaw.el`
 
 (`eclaw-web.el` is optional — not loaded by `(require 'eclaw)`.)
@@ -81,7 +81,7 @@ each file individually:
 
 ```bash
 REPO=/path/to/eclaw
-for f in eclaw-skills.el eclaw-tools.el eclaw-http.el eclaw-web-search.el \
+for f in eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el \
          eclaw-mail.el eclaw-eval.el eclaw.el; do
   emacs -batch -Q -L "$REPO" -f batch-byte-compile "$REPO/$f"
 done
@@ -123,6 +123,7 @@ scripts/eclaw-validate-elisp.sh --smoke NAME
 | `eval-elisp` | Tool policy gating, safety modes, eval handler |
 | `web-settings-json` | Settings API JSON shape (offline; no web server) |
 | `session-context` | Session-start date (no time) in system message |
+| `preferences` | User preferences block, truncation, append/write tools |
 | `get-datetime` | `get_datetime` tool output |
 | `progress-timestamp` | Progress / logging timestamps |
 

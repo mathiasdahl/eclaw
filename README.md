@@ -11,7 +11,7 @@ few hours of working with AI to create this project.
 ## Loading from this repository
 
 Clone the repo and add its directory to `load-path`. All sibling
-`eclaw-*.el` files (`eclaw.el`, `eclaw-skills.el`, `eclaw-tools.el`,
+`eclaw-*.el` files (`eclaw.el`, `eclaw-skills.el`, `eclaw-preferences.el`, `eclaw-tools.el`,
 `eclaw-http.el`, `eclaw-web-search.el`, `eclaw-mail.el`) must live in that directory; only the core feature
 needs to be required:
 
@@ -41,8 +41,9 @@ approval-gated under default `eclaw-tool-approval-mode`.
 
 All eclaw-owned data lives under one directory, `eclaw-folder` (default `~/.eclaw/`):
 conversation archives in `conversations/`, notes in `notes/`, agent skills in
-`skills/`, the JSONL log as `eclaw-log.jsonl`, and tool-approval rules in
-`tool-approval-rules.el`. See [`docs/skills.md`](docs/skills.md).
+`skills/`, user preferences in `preferences.md`, the JSONL log as `eclaw-log.jsonl`,
+and tool-approval rules in `tool-approval-rules.el`. See [`docs/skills.md`](docs/skills.md)
+and [`docs/preferences.md`](docs/preferences.md).
 
 ```emacs-lisp
 (setq eclaw-folder (expand-file-name "~/my-eclaw/"))
