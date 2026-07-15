@@ -1,6 +1,7 @@
 ;;; smoke/get-datetime.el — get_datetime tool output.
 
 (require 'eclaw)
+(require 'json)
 
 (defun smoke--assert (label condition)
   (unless condition
@@ -11,6 +12,18 @@
        (result))
   (setq eclaw--session-started session-time)
   (setq result (eclaw-tool-get-datetime))
+  (let* ((tools (eclaw-tool-definitions))
+         (tool (seq-find (lambda (entry)
+                           (equal (alist-get 'name (alist-get 'function entry))
+                                  "get_datetime"))
+                         tools))
+         (params (alist-get 'parameters (alist-get 'function tool)))
+         (encoded (json-encode params)))
+    (smoke--assert "parameters type object"
+                   (string-match-p "\"type\":\"object\"" encoded))
+    (smoke--assert "parameters properties not null"
+                   (and (string-match-p "\"properties\":" encoded)
+                        (not (string-match-p "\"properties\":null" encoded)))))
   (smoke--assert "now line present"
                  (string-match-p "^now: " result))
   (smoke--assert "session_started line present"

@@ -963,9 +963,10 @@ When the fourth element is `:optional', omit SYM from JSON `required'."
               properties)
         (unless optional-p
           (push sym required))))
-    `((type . "object")
-      (properties . ,(nreverse properties))
-      (required . ,(apply #'vector (mapcar #'symbol-name (nreverse required)))))))
+    (let ((props (nreverse properties)))
+      `((type . "object")
+        (properties . ,(if props props (make-hash-table)))
+        (required . ,(apply #'vector (mapcar #'symbol-name (nreverse required))))))))
 
 (defmacro eclaw-deftool (name description params &rest rest)
   "Declare a model-invokable tool.
