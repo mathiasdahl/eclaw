@@ -423,6 +423,7 @@ Return the written file path, or nil when there is nothing to archive."
                             tools)))
       (make-directory dir t)
       (with-temp-file path
+        (set-buffer-file-coding-system 'utf-8-unix)
         (insert content))
       path)))
 
