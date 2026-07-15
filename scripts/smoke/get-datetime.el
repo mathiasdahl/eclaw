@@ -24,6 +24,25 @@
     (smoke--assert "parameters properties not null"
                    (and (string-match-p "\"properties\":" encoded)
                         (not (string-match-p "\"properties\":null" encoded)))))
+  (let ((stale '((type . "object") (properties) (required . [])))
+        (encoded)
+        (tool-entry))
+    (puthash "get_datetime"
+             (list :description "stale"
+                   :parameters stale
+                   :handler #'eclaw-tool-get-datetime
+                   :risk :read)
+             eclaw--tool-registry)
+    (setq tool-entry (seq-find (lambda (entry)
+                                 (equal (alist-get 'name
+                                                   (alist-get 'function entry))
+                                        "get_datetime"))
+                               (eclaw-tool-definitions)))
+    (setq encoded (json-encode (alist-get 'parameters
+                                          (alist-get 'function tool-entry))))
+    (smoke--assert "stale nil properties normalized in tool-definitions"
+                   (and (string-match-p "\"properties\":{}" encoded)
+                        (not (string-match-p "\"properties\":null" encoded)))))
   (smoke--assert "now line present"
                  (string-match-p "^now: " result))
   (smoke--assert "session_started line present"

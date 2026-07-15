@@ -523,10 +523,15 @@ CONTENT may be nil; it is stored as an empty string."
                  (eclaw--iso-timestamp eclaw--session-started))
        ""))))
 
-(eclaw-deftool get_datetime
-  "Return the current wall-clock date and time. Session date is in the system message; call when time of day matters."
-  ()
-  (eclaw-tool-get-datetime))
+(defun eclaw--register-get-datetime-tool ()
+  "Register `get_datetime' at load time."
+  (eclaw--register-tool
+   "get_datetime"
+   "Return the current wall-clock date and time. Session date is in the system message; call when time of day matters."
+   (eclaw--deftool-params-to-schema '())
+   (lambda (_args) (eclaw-tool-get-datetime))))
+
+(eclaw--register-get-datetime-tool)
 
 (defun eclaw-build-chat-payload (messages)
   "Return the JSON-serializable request alist for message list MESSAGES.

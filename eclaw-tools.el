@@ -425,6 +425,16 @@ Recognized keys include `:risk' (value `:read' or `:write')."
 
 ) ;; eval-and-compile
 
+(defun eclaw--parameters-schema-for-api (schema)
+  "Return PARAMETERS schema that JSON-encodes for OpenRouter/OpenAI tools.
+Empty `properties' must encode as {}, not null."
+  (let* ((type (or (cdr (assoc 'type schema)) "object"))
+         (props (cdr (assoc 'properties schema)))
+         (required (cdr (assoc 'required schema))))
+    `((type . ,type)
+      (properties . ,(if props props (make-hash-table)))
+      (required . ,(or required (vector))))))
+
 (defun eclaw--register-tool (name description parameters-schema handler
                               &optional risk)
   "Register a tool NAME (string) for the API and for dispatch.
@@ -435,7 +445,7 @@ Optional RISK is `:read' (default), `:write' (side effects on disk),
 or `:dangerous' (full session access, e.g. `eval_elisp')."
   (puthash name
            (list :description description
-                 :parameters parameters-schema
+                 :parameters (eclaw--parameters-schema-for-api parameters-schema)
                  :handler handler
                  :risk (eclaw--normalize-tool-risk (or risk :read)))
            eclaw--tool-registry))
@@ -968,6 +978,12 @@ When the fourth element is `:optional', omit SYM from JSON `required'."
         (properties . ,(if props props (make-hash-table)))
         (required . ,(apply #'vector (mapcar #'symbol-name (nreverse required))))))))
 
+(defun eclaw--register-tool-from-deftool (name description params risk handler)
+  "Register tool NAME at load time; build JSON schema from PARAMS then."
+  (eclaw--register-tool (symbol-name name) description
+                        (eclaw--deftool-params-to-schema params)
+                        handler risk))
+
 (defmacro eclaw-deftool (name description params &rest rest)
   "Declare a model-invokable tool.
 NAME is a symbol (API name is `symbol-name' of NAME).  DESCRIPTION is a
@@ -993,14 +1009,10 @@ BODY should return a string (tool result content for the model)."
                     (let ((sym (car spec)))
                       (list sym `(alist-get ',sym args))))
                   params)))
-    `(eclaw--register-tool
-      ,(symbol-name name)
-      ,description
-      (eclaw--deftool-params-to-schema ',params)
+    `(eclaw--register-tool-from-deftool ',name ,description ',params ',risk
       (lambda (args)
         (let* ,bindings
-          ,@body))
-      ,risk)))
+          ,@body)))))
 
 (defun eclaw-tool-definitions ()
   "Return the OpenAI-format `tools' list, or nil if tools are disabled or absent.
@@ -1012,7 +1024,8 @@ to nil for text-only requests."
         (when (eclaw-tool-policy-enabled-p name)
           (let* ((info (gethash name eclaw--tool-registry))
                  (descr (plist-get info :description))
-                 (params (plist-get info :parameters)))
+                 (params (eclaw--parameters-schema-for-api
+                          (plist-get info :parameters))))
             (push `((type . "function")
                     (function . ((name . ,name)
                                  (description . ,descr)
