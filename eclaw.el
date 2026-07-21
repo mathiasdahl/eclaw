@@ -479,6 +479,78 @@ Broken snapshot files are skipped; a debug message is logged."
     (sort rows
           (lambda (a b)
             (string-lessp (plist-get b 'ended) (plist-get a 'ended))))))
+(defun eclaw--valid-snapshot-basename-p (name)
+  "Return non-nil when NAME is a safe snapshot file basename."
+  (and (stringp name)
+       (not (string-empty-p name))
+       (not (string-match-p "/" name))
+       (not (string-match-p "\\.\\." name))
+       (string-match-p "\\.json\\'" name)))
+(defun eclaw--parse-iso-timestamp (string)
+  "Parse ISO 8601 timestamp STRING to a time value, or nil when empty."
+  (when (and string (stringp string) (not (string-empty-p string)))
+    (parse-time-string string)))
+
+(defun eclaw--rebuild-eclaw-buffer-from-conversation ()
+  "Rebuild `*eclaw*' transcript from `eclaw-conversation' display messages."
+  (let ((buf (get-buffer-create "*eclaw*")))
+    (with-current-buffer buf
+      (eclaw--eclaw-buffer-setup)
+      (let ((inhibit-read-only t))
+        (when view-mode (view-mode -1))
+        (erase-buffer)
+        (dolist (msg (eclaw-conversation-display-messages))
+          (let ((role (alist-get 'role msg))
+                (content (alist-get 'content msg)))
+            (if (equal role "user")
+                (insert (concat "\n\nYou:\n" content "\n\nAssistant:\n"))
+              (insert content))))
+        (view-mode 1)))))
+(defun eclaw-restore-conversation (file)
+  "Restore archived conversation FILE into the live session.
+FILE is the snapshot basename under `eclaw-folder'/`conversations/'.
+When the current session has content, archive it first."
+  (interactive
+   (let* ((archives (eclaw-list-archived-conversations))
+          (candidates
+           (mapcar (lambda (row)
+                     (let ((name (plist-get row 'file))
+                           (preview (plist-get row 'preview))
+                           (ended (plist-get row 'ended)))
+                       (cons (format "%s  %s" ended
+                                     (if (string-empty-p preview)
+                                         name
+                                       (truncate-string-to-width preview 60)))
+                             name)))
+                   archives)))
+     (unless candidates
+       (user-error "No restorable conversation snapshots in %s"
+                   (eclaw--conversation-archive-dir)))
+     (list (completing-read "Restore conversation: " candidates nil t))))
+  (unless (eclaw--valid-snapshot-basename-p file)
+    (user-error "Invalid snapshot basename: %s" file))
+  (when (eclaw--session-has-content-p)
+    (condition-case err
+        (let ((path (eclaw-archive-current-conversation)))
+          (unless path
+            (user-error "Archive produced no file"))
+          (eclaw-message "eclaw: current session archived to %s" path))
+      (error
+       (user-error "Archive failed: %s" (error-message-string err)))))
+  (let* ((path (expand-file-name file (eclaw--conversation-archive-dir)))
+         (snapshot (eclaw--conversation-read-snapshot path))
+         (started (alist-get 'started snapshot))
+         (usage (alist-get 'usage snapshot))
+         (messages (alist-get 'messages snapshot)))
+    (setq eclaw-conversation (copy-tree messages))
+    (setq eclaw--session-started (eclaw--parse-iso-timestamp started))
+    (setq eclaw--usage-conversation (copy-tree usage))
+    (eclaw--rebuild-eclaw-buffer-from-conversation)
+    (eclaw-message "eclaw: conversation restored from %s" file)))
+
+
+
+
 
 
 

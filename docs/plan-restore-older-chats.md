@@ -16,7 +16,7 @@ Mark steps done here as you go:
 - [x] **1d** — Smoke: `conversation-snapshot-write`
 - [x] **2a** — `eclaw--conversation-read-snapshot`
 - [x] **2b** — `eclaw-list-archived-conversations`
-- [ ] **2c** — `eclaw-restore-conversation`
+- [x] **2c** — `eclaw-restore-conversation`
 - [ ] **2d** — Smoke: `conversation-restore`
 - [ ] **3a** — `GET /api/conversations`
 - [ ] **3b** — `POST /api/conversations/restore`
