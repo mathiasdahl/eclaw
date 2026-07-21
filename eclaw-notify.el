@@ -136,6 +136,12 @@ under the eclaw repo directory."
 (defun eclaw-notify--invalidate-subscriptions-cache ()
   (setq eclaw-notify--subscriptions-cache nil))
 
+(defun eclaw-notify--json-get (key alist)
+  "Return value for string KEY in JSON object ALIST, or nil.
+Uses `assoc-string' because `alist-get' compares with `eq' by default."
+  (cdr (assoc-string key alist)))
+
+
 (defun eclaw-notify--read-vapid ()
   "Return VAPID alist from disk, or nil when missing/invalid."
   (unless eclaw-notify--vapid-cache
@@ -154,10 +160,11 @@ under the eclaw repo directory."
   "Return URL-safe base64 VAPID public key string, or nil when unavailable."
   (let ((vapid (eclaw-notify--read-vapid)))
     (when vapid
-      (let ((key (or (alist-get "publicKey" vapid)
-                     (alist-get "public_key" vapid))))
+      (let ((key (or (eclaw-notify--json-get "publicKey" vapid)
+                     (eclaw-notify--json-get "public_key" vapid))))
         (when (and (stringp key) (not (string-empty-p key)))
           key)))))
+
 
 (defun eclaw-notify--load-subscriptions-from-disk ()
   "Return subscription list from `eclaw-notify--subscriptions-file'."
@@ -192,29 +199,34 @@ under the eclaw repo directory."
 
 (defun eclaw-notify--subscription-endpoint (sub)
   "Return endpoint string from subscription alist SUB, or nil."
-  (when (and (listp sub) (stringp (alist-get "endpoint" sub)))
-    (alist-get "endpoint" sub)))
+  (let ((endpoint (eclaw-notify--json-get "endpoint" sub)))
+    (when (and (listp sub) (stringp endpoint))
+      endpoint)))
+
 
 (defun eclaw-notify--subscription-valid-p (sub)
   "Non-nil when SUB looks like a Web Push subscription object."
   (and (listp sub)
-       (stringp (alist-get "endpoint" sub))
-       (not (string-empty-p (alist-get "endpoint" sub)))
-       (let ((keys (alist-get "keys" sub)))
+       (let ((endpoint (eclaw-notify--json-get "endpoint" sub)))
+         (and (stringp endpoint) (not (string-empty-p endpoint))))
+       (let ((keys (eclaw-notify--json-get "keys" sub)))
          (and (listp keys)
-              (stringp (alist-get "p256dh" keys))
-              (stringp (alist-get "auth" keys))))))
+              (stringp (eclaw-notify--json-get "p256dh" keys))
+              (stringp (eclaw-notify--json-get "auth" keys))))))
+
 
 (defun eclaw-notify--normalize-subscription (sub)
   "Return subscription alist with string keys, or signal on invalid SUB."
   (unless (eclaw-notify--subscription-valid-p sub)
     (error "invalid push subscription JSON"))
-  (list (cons "endpoint" (alist-get "endpoint" sub))
-        (cons "keys"
-              (list (cons "p256dh" (alist-get "p256dh" (alist-get "keys" sub)))
-                    (cons "auth" (alist-get "auth" (alist-get "keys" sub)))))
-        (cons "expirationTime"
-              (or (alist-get "expirationTime" sub) :json-null))))
+  (let ((keys (eclaw-notify--json-get "keys" sub)))
+    (list (cons "endpoint" (eclaw-notify--json-get "endpoint" sub))
+          (cons "keys"
+                (list (cons "p256dh" (eclaw-notify--json-get "p256dh" keys))
+                      (cons "auth" (eclaw-notify--json-get "auth" keys))))
+          (cons "expirationTime"
+                (or (eclaw-notify--json-get "expirationTime" sub) :json-null)))))
+
 
 (defun eclaw-notify-subscribe-secret-valid-p (secret)
   "Non-nil when SECRET matches `eclaw-notify-subscribe-secret'."

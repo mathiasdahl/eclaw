@@ -54,7 +54,8 @@
   (let ((loaded (eclaw-notify--load-subscriptions-from-disk)))
     (smoke--assert "duplicate endpoint replaces subscription"
                    (and (= (length loaded) 1)
-                        (string= (alist-get "p256dh" (alist-get "keys" (car loaded)))
+                        (string= (cdr (assoc-string "p256dh"
+                                                    (cdr (assoc-string "keys" (car loaded)))))
                                  "NEWKEY"))))
 
   (smoke--assert "remove subscription succeeds"
