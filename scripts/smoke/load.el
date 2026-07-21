@@ -31,10 +31,16 @@
 (unless (gethash "send_email" eclaw--tool-registry)
   (error "smoke load: send_email tool not registered"))
 
+(unless (gethash "send_push" eclaw--tool-registry)
+  (error "smoke load: send_push tool not registered"))
+
 (unless (gethash "eval_elisp" eclaw--tool-registry)
   (error "smoke load: eval_elisp tool not registered"))
 
 (unless (not (eclaw-tool-policy-enabled-p "eval_elisp"))
   (error "smoke load: eval_elisp should be disabled by default"))
+
+(unless (not (eclaw-tool-policy-enabled-p "send_push"))
+  (error "smoke load: send_push should be disabled by default"))
 
 (message "smoke load: OK")

@@ -75,9 +75,12 @@ run_smoke() {
     push-subscribe)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/push-subscribe.el"
       ;;
+    send-push)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/send-push.el"
+      ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context, preferences, archive-utf8, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json, push-subscribe" >&2
+      echo "Known: read-file, load, web-search, session-context, preferences, archive-utf8, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json, push-subscribe, send-push" >&2
       exit 2
       ;;
   esac

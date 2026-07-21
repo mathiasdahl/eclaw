@@ -289,7 +289,9 @@ correctly.  Leave empty when the app is mounted at the site root."
     ("model" . ,(eclaw-normalize-model eclaw-model))
     ("max_tokens_per_prompt" . ,eclaw-max-tokens-per-prompt)
     ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)
-    ("push_enabled" . ,(if eclaw-notify-enabled t :json-false))
+    ("push_enabled" . ,(if (and eclaw-notify-enabled (eclaw-notify-vapid-public-key))
+                          t
+                        :json-false))
     ("push_vapid_public_key" . ,(or (eclaw-notify-vapid-public-key) :json-null))))
 (defun eclaw-web--json-bool (value)
   "Normalize JSON boolean VALUE to Emacs t/nil."

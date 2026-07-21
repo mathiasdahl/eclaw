@@ -22,8 +22,9 @@ When the file is missing, defaults apply (see below). The file is created on the
 | `eval_elisp` | `nil` |
 | `web_search`, `web_fetch` | `eclaw-web-search-enabled` |
 | `send_email` | `eclaw-mail-enabled` |
+| `send_push` | `eclaw-notify-send-enabled` |
 
-Module `defcustom`s (`eclaw-web-search-enabled`, `eclaw-mail-enabled`) seed defaults only. Runtime control is the policy file / web UI.
+Module `defcustom`s (`eclaw-web-search-enabled`, `eclaw-mail-enabled`, `eclaw-notify-send-enabled`) seed defaults only. Runtime control is the policy file / web UI.
 
 ## Enforcement
 
@@ -37,7 +38,7 @@ Registry `:risk` values:
 | Risk | Examples | Approval under `writes` mode |
 |------|----------|------------------------------|
 | `:read` | `read_file`, `web_search` | Not gated |
-| `:write` | `notes_write_text`, `preferences_append`, `send_email` | Gated |
+| `:write` | `notes_write_text`, `preferences_append`, `send_email`, `send_push` | Gated |
 | `:dangerous` | `eval_elisp` | Gated (same as `:write`) |
 
 Under `all` mode, every tool is gated. Under `off`, nothing is gated by approval (policy still applies).

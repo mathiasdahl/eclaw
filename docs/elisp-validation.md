@@ -120,6 +120,8 @@ scripts/eclaw-validate-elisp.sh --smoke NAME
 | `describe-symbol` | Symbol help without leaking values |
 | `web-search` | Provider registry, SSRF URL policy (offline) |
 | `send-email` | Recipient enum, offline `mailme-mail` stub |
+| `push-subscribe` | Subscription storage, chat-complete flag decoupling |
+| `send-push` | `send_push` tool validation, offline `call-process` stub |
 | `eval-elisp` | Tool policy gating, safety modes, eval handler |
 | `web-settings-json` | Settings API JSON shape (offline; no web server) |
 | `session-context` | Session-start date (no time) in system message |

@@ -9,7 +9,7 @@ eclaw gates local tool execution before handlers run (`eclaw-tool-approval-mode`
 | `eclaw-tool-approval-mode` | `off`, `writes`, `all` | `all` |
 | `eclaw-tool-approval-noninteractive` | `deny`, `allow` | `deny` |
 
-Write tools (`notes_write_text`, `skill_write`, `preferences_append`, `preferences_write`, …) are tagged `:write` in the registry. Tools with full session access (`eval_elisp`, …) are tagged `:dangerous`. With `writes`, both `:write` and `:dangerous` tools are gated; with `all`, every registered tool is gated.
+Write tools (`notes_write_text`, `skill_write`, `preferences_append`, `preferences_write`, `send_push`, …) are tagged `:write` in the registry. Tools with full session access (`eval_elisp`, …) are tagged `:dangerous`. With `writes`, both `:write` and `:dangerous` tools are gated; with `all`, every registered tool is gated.
 
 For `eval_elisp`, read the code shown in the approval prompt carefully — approval grants full session access unless `eclaw-eval-safety-mode` is `restricted` or `strict`. See [eval_elisp security](eval-elisp-security.md).
 

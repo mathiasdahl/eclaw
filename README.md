@@ -168,8 +168,19 @@ without minibuffer prompts—acceptable only on a trusted localhost setup.
 
 ### Web Push notifications
 
-Browser notifications when a chat turn completes (tab can be closed). Requires
+Browser notifications via Web Push (tab can be closed). Requires
 [pywebpush](https://github.com/web-push-libs/pywebpush) on the server — not implemented in Elisp.
+
+Chat-complete pings and model-initiated push are configured independently:
+
+| Variable | Purpose |
+|----------|---------|
+| `eclaw-notify-enabled` | Master switch: subscribe UI and all sends |
+| `eclaw-notify-on-chat-complete` | Push when a chat turn finishes (default `t`) |
+| `eclaw-notify-send-enabled` | Default tool-policy for `send_push` (default `nil`) |
+
+The `send_push` tool sends a notification with `title`, `body`, and optional `url`.
+User-owned Lisp can also call `(eclaw-notify-message …)` or `(eclaw-notify-send …)` when push is enabled.
 
 1. Generate VAPID keys once and save as `<eclaw-folder>/push-vapid.json`:
 
@@ -189,6 +200,12 @@ Use `npx web-push generate-vapid-keys` or the `py_vapid` CLI.
 (setq eclaw-notify-enabled t
       eclaw-notify-push-program "~/.local/share/eclaw-venv/bin/python3"
       eclaw-notify-click-url "https://your-host/secret-path/")
+;; Chat ping only (no model push):
+(setq eclaw-notify-on-chat-complete t
+      eclaw-notify-send-enabled nil)
+;; Programmatic push only (enable send_push in tool policy / web settings):
+;; (setq eclaw-notify-on-chat-complete nil
+;;       eclaw-notify-send-enabled t)
 ;; Optional: require secret on POST /api/push/subscribe
 (setq eclaw-notify-subscribe-secret "your-random-secret")
 ```

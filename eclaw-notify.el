@@ -32,10 +32,12 @@
 
 (require 'json)
 (require 'subr-x)
+(require 'eclaw-tools)
 
 (declare-function eclaw--folder "eclaw" ())
 (declare-function eclaw-debug-message "eclaw" (format-string &rest args))
 (declare-function eclaw-message "eclaw" (format-string &rest args))
+(declare-function eclaw-progress-message "eclaw" (format-string &rest args))
 
 (defvar eclaw-notify--repo-dir nil
   "Directory containing `eclaw.el', set when this file loads.")
@@ -52,9 +54,20 @@
   :prefix "eclaw-notify-")
 
 (defcustom eclaw-notify-enabled nil
-  "When non-nil, send Web Push notifications when `eclaw-chat' completes.
+  "When non-nil, enable the Web Push subsystem (subscribe UI and sends).
 Requires VAPID keys, at least one stored subscription, and
 `eclaw-notify-push-program'."
+  :type 'boolean
+  :group 'eclaw-notify)
+
+(defcustom eclaw-notify-on-chat-complete t
+  "When non-nil, send a Web Push when `eclaw-chat' completes.
+Requires `eclaw-notify-enabled' and configured push infrastructure."
+  :type 'boolean
+  :group 'eclaw-notify)
+
+(defcustom eclaw-notify-send-enabled nil
+  "When non-nil, default tool policy enables the `send_push' tool."
   :type 'boolean
   :group 'eclaw-notify)
 
@@ -104,6 +117,17 @@ Example: \"~/.local/share/eclaw-venv/bin/python3\"."
 under the eclaw repo directory."
   :type 'file
   :group 'eclaw-notify)
+
+(defconst eclaw-notify-send-max-title-length 100
+  "Maximum characters allowed in a `send_push' title.")
+
+(defconst eclaw-notify-send-max-body-length 500
+  "Maximum characters allowed in a `send_push' body.")
+
+(defun eclaw-notify--non-empty-string-p (value)
+  "Non-nil when VALUE is a non-empty string after trim."
+  (and (stringp value)
+       (not (string-empty-p (string-trim value)))))
 
 (defun eclaw-notify--repo-dir ()
   "Return directory containing eclaw sources."
@@ -270,14 +294,17 @@ Uses `assoc-string' because `alist-get' compares with `eq' by default."
         (concat (substring clean 0 max-len) "…")
       clean)))
 
-(defun eclaw-notify--ready-p ()
-  "Non-nil when push can be attempted."
-  (and eclaw-notify-enabled
-       eclaw-notify-push-program
+(defun eclaw-notify--configured-p ()
+  "Non-nil when push infrastructure is set up."
+  (and eclaw-notify-push-program
        (file-readable-p (eclaw-notify--push-script))
        (file-readable-p (eclaw-notify--vapid-file))
        (eclaw-notify-vapid-public-key)
        (not (null (eclaw-notify--load-subscriptions)))))
+
+(defun eclaw-notify--ready-p ()
+  "Non-nil when push can be attempted."
+  (and eclaw-notify-enabled (eclaw-notify--configured-p)))
 
 
 (defun eclaw-notify-message (title body &optional url)
@@ -308,9 +335,64 @@ No-op when push is not configured; errors are logged and ignored."
                             (error-message-string err))
        nil)))))
 
+(defun eclaw-notify-send (title body &optional url)
+  "Send Web Push with TITLE and BODY via `eclaw-notify-message'.
+Optional URL is opened when the user clicks the notification.
+Return a status string."
+  (let* ((subj (string-trim (or title "")))
+         (text (string-trim (or body ""))))
+    (cond
+     ((not (eclaw-notify--non-empty-string-p subj))
+      "Error: send_push requires non-empty title.")
+     ((not (eclaw-notify--non-empty-string-p text))
+      "Error: send_push requires non-empty body.")
+     ((> (length subj) eclaw-notify-send-max-title-length)
+      (format "Error: send_push title exceeds max length (%d)."
+              eclaw-notify-send-max-title-length))
+     ((> (length text) eclaw-notify-send-max-body-length)
+      (format "Error: send_push body exceeds max length (%d)."
+              eclaw-notify-send-max-body-length))
+     ((not (eclaw-notify--ready-p))
+      "Error: push notifications are not configured or disabled.")
+     (t
+      (eclaw-progress-message "eclaw: send_push %s" subj)
+      (let ((status (eclaw-notify-message subj text url)))
+        (cond
+         ((and (numberp status) (zerop status)) "Push notification sent.")
+         ((numberp status)
+          (format "Error: push script exit %s." status))
+         (t "Error: push notification send failed.")))))))
+
+(defun eclaw-notify--send-push-parameters-schema ()
+  "Return JSON Schema parameters object for `send_push'."
+  `((type . "object")
+    (properties
+     . ((title . ((type . "string")
+                   (description . "Notification title.")))
+        (body . ((type . "string")
+                 (description . "Notification body text.")))
+        (url . ((type . "string")
+                (description . "Optional URL opened when the notification is clicked.")))))
+    (required . ["title" "body"])))
+
+(defun eclaw-notify--register-send-push-tool ()
+  "Register the `send_push' tool."
+  (eclaw--register-tool
+   "send_push"
+   "Send a Web Push notification to subscribed browsers."
+   (eclaw-notify--send-push-parameters-schema)
+   (lambda (args)
+     (eclaw-notify-send (alist-get 'title args)
+                        (alist-get 'body args)
+                        (alist-get 'url args)))
+   :write))
+
 (defun eclaw-notify-chat-complete (_prompt reply)
   "Notify after `eclaw-chat' with a preview of assistant REPLY."
-  (eclaw-notify-message eclaw-notify-title (eclaw-notify--truncate reply)))
+  (when eclaw-notify-on-chat-complete
+    (eclaw-notify-message eclaw-notify-title (eclaw-notify--truncate reply))))
+
+(eclaw-notify--register-send-push-tool)
 
 (when load-file-name
   (setq eclaw-notify--repo-dir (file-name-directory load-file-name)))

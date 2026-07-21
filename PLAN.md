@@ -77,6 +77,7 @@ Implementation: Emacs Lisp modules plus **`eclaw-web.el`** (optional web UI) and
 | `web_search` | Live web search (Jina by default; provider registry) | `:read` |
 | `web_fetch` | Fetch URL content as text (SSRF guard; Jina Reader by default) | `:read` |
 | `send_email` | Send email to configured work or home address only (`mailme-mail` backend) | `:write` |
+| `send_push` | Send Web Push to subscribed browsers (`eclaw-notify-send`) | `:write` |
 | `notes_write_text` | `.txt` only under `<eclaw-folder>/notes/` | `:write` |
 | `skill_write` | `<eclaw-folder>/skills/<dir>/SKILL.md` only | `:write` |
 | `preferences_append` | Append one bullet to `<eclaw-folder>/preferences.md` | `:write` |
@@ -116,10 +117,10 @@ Implementation: Emacs Lisp modules plus **`eclaw-web.el`** (optional web UI) and
 
 ## Web Push notifications (Milestone 5 — done)
 
-- **`eclaw-notify.el`:** subscription file, VAPID JSON, optional subscribe secret; `eclaw-notify-message` invokes **`scripts/eclaw-web-push.py`** (pywebpush) via `call-process`
-- **`eclaw-chat`** calls **`eclaw-notify-chat-complete`** when a turn finishes (web, `*eclaw*`, batch)
+- **`eclaw-notify.el`:** subscription file, VAPID JSON, optional subscribe secret; `eclaw-notify-message` invokes **`scripts/eclaw-web-push.py`** (pywebpush) via `call-process`; **`send_push`** tool via `eclaw-notify-send`
+- **`eclaw-chat`** calls **`eclaw-notify-chat-complete`** when a turn finishes (web, `*eclaw*`, batch); gated by **`eclaw-notify-on-chat-complete`**
 - **Web UI:** bell button in **`web/chat.html`**; **`web/sw.js`**; **`GET /sw.js`**, **`POST/DELETE /api/push/subscribe`** in **`eclaw-web.el`**
-- **Config:** `eclaw-notify-enabled`, `eclaw-notify-push-program`, `eclaw-notify-click-url`, `eclaw-notify-subscribe-secret`; storage under `<eclaw-folder>/push-*.json`
+- **Config:** `eclaw-notify-enabled`, `eclaw-notify-on-chat-complete`, `eclaw-notify-send-enabled`, `eclaw-notify-push-program`, `eclaw-notify-click-url`, `eclaw-notify-subscribe-secret`; storage under `<eclaw-folder>/push-*.json`
 
 ## Email tool (Milestone — done)
 

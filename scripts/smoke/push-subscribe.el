@@ -1,6 +1,7 @@
 ;;; smoke/push-subscribe.el — push subscription storage without live FCM.
 
 (require 'json)
+(require 'cl-lib)
 (require 'eclaw)
 (require 'eclaw-notify)
 
@@ -64,6 +65,25 @@
                  (null (eclaw-notify--load-subscriptions-from-disk)))
 
   (smoke--assert "truncate adds ellipsis"
-                 (string-match-p "…\\'" (eclaw-notify--truncate (make-string 300 ?x)))))
+                 (string-match-p "…\\'" (eclaw-notify--truncate (make-string 300 ?x))))
+
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'eclaw-notify-message)
+               (lambda (_title _body &optional _url)
+                 (setq calls (1+ calls))
+                 0)))
+      (let ((eclaw-notify-on-chat-complete nil))
+        (eclaw-notify-chat-complete "prompt" "reply body")
+        (smoke--assert "chat-complete respects on-chat-complete flag"
+                       (= calls 0)))
+      (let ((eclaw-notify-on-chat-complete t))
+        (eclaw-notify-chat-complete "prompt" "reply body")
+        (smoke--assert "chat-complete sends when flag on"
+                       (= calls 1)))))
+
+  (setq eclaw-notify-enabled nil)
+  (smoke--assert "send rejects when notify disabled"
+                 (string-match-p "not configured or disabled"
+                                 (eclaw-notify-send "Title" "Body"))))
 
 (message "smoke push-subscribe: OK")

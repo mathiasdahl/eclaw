@@ -59,7 +59,7 @@
 ;;   eclaw-web-search.el — `web_search' and `web_fetch' tools (Jina by default)
 ;;   eclaw-mail.el      — `send_email' tool (work/home only via `mailme-mail')
 ;;   eclaw-eval.el      — `eval_elisp' tool (full session eval; policy-gated)
-;;   eclaw-notify.el    — Web Push notifications (browser chat; external pywebpush)
+;;   eclaw-notify.el    — Web Push notifications; `send_push' tool (browser chat; external pywebpush)
 ;;
 ;; Load order in `eclaw.el': `(require 'eclaw-skills)' and `(require 'eclaw-preferences)'
 ;; before conversation;

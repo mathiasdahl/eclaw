@@ -563,6 +563,8 @@ Loaded from `eclaw--tool-policy-file'.")
      (if (boundp 'eclaw-web-search-enabled) eclaw-web-search-enabled t))
     ("send_email"
      (if (boundp 'eclaw-mail-enabled) eclaw-mail-enabled t))
+    ("send_push"
+     (if (boundp 'eclaw-notify-send-enabled) eclaw-notify-send-enabled nil))
     (_ t)))
 
 (defun eclaw--tool-policy-effective-p (tool-name)
