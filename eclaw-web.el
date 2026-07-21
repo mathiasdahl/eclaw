@@ -97,6 +97,7 @@ correctly.  Leave empty when the app is mounted at the site root."
 (declare-function eclaw-usage-stats "eclaw" ())
 (declare-function eclaw-conversation-display-messages "eclaw" ())
 (declare-function eclaw-list-archived-conversations "eclaw" ())
+(declare-function eclaw-restore-conversation "eclaw" (file))
 (declare-function eclaw-tool-policy-list "eclaw-tools" ())
 (declare-function eclaw-tool-policy-apply-updates "eclaw-tools" (updates))
 (declare-function eclaw-notify-add-subscription "eclaw-notify" (sub))
@@ -294,6 +295,27 @@ correctly.  Leave empty when the app is mounted at the site root."
                           '("Cache-Control" . "no-store"))
       (process-send-string process
                            (json-encode (eclaw-web--archived-conversations-json))))))
+
+(defun eclaw-web--handle-post-conversations-restore (request)
+  (with-slots (process body) request
+    (condition-case err
+        (let* ((data (eclaw-web--parse-json-body-string-keys body))
+               (file (cdr (assoc-string "file" data))))
+          (if (and file (stringp file) (not (string-empty-p file)))
+              (progn
+                (eclaw-web--with-web-context
+                 (lambda () (eclaw-restore-conversation file)))
+                (eclaw-web--json-response
+                 process 200
+                 `((messages . ,(eclaw-conversation-display-messages))
+                   (usage . ,(eclaw-usage-stats)))))
+            (eclaw-web--json-response
+             process 400
+             '(("error" . "missing or empty \"file\"")))))
+      (error
+       (eclaw-web--json-response
+        process 400
+        `(("error" . ,(error-message-string err))))))))
 
 (defun eclaw-web--tool-policy-json ()
   "Return tool policy rows as JSON-friendly alists with string keys."
@@ -504,6 +526,8 @@ correctly.  Leave empty when the app is mounted at the site root."
       (eclaw-web--handle-get-conversation request))
      ((and get-path (string= get-path "/api/conversations"))
       (eclaw-web--handle-get-conversations request))
+     ((and post-path (string= post-path "/api/conversations/restore"))
+      (eclaw-web--handle-post-conversations-restore request))
      ((and get-path (string= get-path "/api/settings"))
       (eclaw-web--handle-get-settings request))
      ((and post-path (string= post-path "/api/chat"))

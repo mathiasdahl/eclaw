@@ -19,7 +19,7 @@ Mark steps done here as you go:
 - [x] **2c** — `eclaw-restore-conversation`
 - [x] **2d** — Smoke: `conversation-restore`
 - [x] **3a** — `GET /api/conversations`
-- [ ] **3b** — `POST /api/conversations/restore`
+- [x] **3b** — `POST /api/conversations/restore`
 - [ ] **4a** — History panel shell (`web/chat.html`)
 - [ ] **4b** — Fetch and render list
 - [ ] **4c** — Restore action + confirm
