@@ -427,6 +427,8 @@ unreadable, or not snapshot format version 1."
               (with-temp-buffer
                 (set-buffer-file-coding-system 'utf-8-unix)
                 (insert-file-contents-literally file)
+                (set-buffer-multibyte t)
+                (decode-coding-region (point-min) (point-max) 'utf-8-unix)
                 (json-read-from-string (buffer-string)))
             (error
              (error "eclaw: invalid snapshot JSON in %s: %s"
@@ -441,6 +443,7 @@ unreadable, or not snapshot format version 1."
     (unless (listp (alist-get 'messages snapshot))
       (error "eclaw: snapshot messages must be a list in %s" file))
     snapshot))
+
 (defun eclaw--snapshot-turn-count (messages)
   "Return the number of user turns in snapshot MESSAGES."
   (length

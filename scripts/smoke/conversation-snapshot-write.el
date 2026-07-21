@@ -23,7 +23,7 @@
         (list (eclaw-user-message "run read_file on smoke fixture")
               assistant-with-tools
               (eclaw-tool-message tool-call-id "smoke file contents")
-              (eclaw-assistant-message "The file contains smoke test data.")))
+              (eclaw-assistant-message "Hi! 👋 The file contains smoke test data.")))
        (md-path)
        (json-path)
        (snapshot)
@@ -37,15 +37,15 @@
   (smoke--assert "markdown archive exists" (file-regular-p md-path))
   (setq json-path (concat (file-name-sans-extension md-path) ".json"))
   (smoke--assert "json snapshot exists" (file-regular-p json-path))
-  (setq snapshot (with-temp-buffer
-                   (set-buffer-file-coding-system 'utf-8-unix)
-                   (insert-file-contents-literally json-path)
-                   (json-read-from-string (buffer-string))))
-  (smoke--assert "snapshot version is 1" (= 1 (cdr (assoc-string "version" snapshot))))
-  (setq read-messages (cdr (assoc-string "messages" snapshot)))
+  (setq snapshot (eclaw--conversation-read-snapshot json-path))
+  (smoke--assert "snapshot version is 1" (= 1 (alist-get 'version snapshot)))
+  (setq read-messages (alist-get 'messages snapshot))
   (smoke--assert "snapshot messages is a list" (listp read-messages))
-  (smoke--assert "messages round-trip via json-read"
-                 (equal (json-read-from-string (json-encode original-messages))
-                        read-messages))
+  (smoke--assert "messages round-trip via snapshot read"
+                 (equal original-messages read-messages))
+  (smoke--assert "emoji preserved as multibyte"
+                 (let ((content (alist-get 'content (nth 3 read-messages))))
+                   (and (multibyte-string-p content)
+                        (string-match-p "👋" content))))
   (delete-directory tmpdir t)
   (message "smoke conversation-snapshot-write: OK"))
