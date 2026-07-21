@@ -273,11 +273,12 @@ Uses `assoc-string' because `alist-get' compares with `eq' by default."
 (defun eclaw-notify--ready-p ()
   "Non-nil when push can be attempted."
   (and eclaw-notify-enabled
-       (eclaw-notify-push-program)
+       eclaw-notify-push-program
        (file-readable-p (eclaw-notify--push-script))
        (file-readable-p (eclaw-notify--vapid-file))
        (eclaw-notify-vapid-public-key)
        (not (null (eclaw-notify--load-subscriptions)))))
+
 
 (defun eclaw-notify-message (title body &optional url)
   "Send Web Push with TITLE and BODY to all stored subscriptions.
