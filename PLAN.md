@@ -23,7 +23,7 @@ Current model backend:
 - OpenRouter API
 - model: `deepseek/deepseek-v4-flash:nitro` (`eclaw-model`; list in `eclaw-available-models`)
 
-Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650; orchestration spine), **`eclaw-tools.el`** (~1,080; registry and handlers), **`eclaw-skills.el`** (~200), **`eclaw-http.el`** (~200), **`eclaw-web-search.el`** (~250). Load with `(require 'eclaw)` only — see **Source file layout** below.
+Implementation: Emacs Lisp modules plus **`eclaw-web.el`** (optional web UI) and **`scripts/eclaw-web-push.py`**. Load core with `(require 'eclaw)`; web UI with `(require 'eclaw-web)`.
 
 ---
 
@@ -113,6 +113,13 @@ Implementation: five Emacs Lisp files (~2,300 lines total): **`eclaw.el`** (~650
 - **Provider contract:** each provider implements search `(query max-results) -> string` and fetch `(url) -> string`; registry `eclaw--ws-provider-alist`; active provider `eclaw-web-search-provider` (default `'jina`)
 - **Config:** `eclaw-web-search-enabled`, `eclaw-jina-api-key` (`JINA_API_KEY` env, optional), `eclaw-jina-search-url`, `eclaw-jina-reader-url`, result/fetch caps — all in **`eclaw-web-search.el`**
 - **HTTP:** generic `eclaw--http-get`, `eclaw-http-read-response`, `eclaw-http-post-json` in **`eclaw-http.el`**
+
+## Web Push notifications (Milestone 5 — done)
+
+- **`eclaw-notify.el`:** subscription file, VAPID JSON, optional subscribe secret; `eclaw-notify-message` invokes **`scripts/eclaw-web-push.py`** (pywebpush) via `call-process`
+- **`eclaw-chat`** calls **`eclaw-notify-chat-complete`** when a turn finishes (web, `*eclaw*`, batch)
+- **Web UI:** bell button in **`web/chat.html`**; **`web/sw.js`**; **`GET /sw.js`**, **`POST/DELETE /api/push/subscribe`** in **`eclaw-web.el`**
+- **Config:** `eclaw-notify-enabled`, `eclaw-notify-push-program`, `eclaw-notify-click-url`, `eclaw-notify-subscribe-secret`; storage under `<eclaw-folder>/push-*.json`
 
 ## Email tool (Milestone — done)
 
@@ -266,6 +273,12 @@ Tool result:
 - Generic HTTP helpers in **`eclaw-http.el`**: `eclaw--http-get`, `eclaw-http-read-response`, `eclaw-http-post-json`
 - Offline smoke: `scripts/smoke/web-search.el` (URL policy + registry)
 
+## Milestone 5 — Web Push notifications ✓
+
+- **`eclaw-notify.el`**, **`scripts/eclaw-web-push.py`**, **`web/sw.js`**; subscribe API and bell UI in **`eclaw-web.el`** / **`web/chat.html`**
+- Notify on **`eclaw-chat`** completion; pywebpush on server (not Elisp crypto)
+- Smoke: `scripts/smoke/push-subscribe.el`
+
 ## Tool call approval ✓
 
 Human-in-the-loop before local tools run, with persisted rules. Documented in [`docs/tool-approval.md`](docs/tool-approval.md). Slices A–F:
@@ -350,6 +363,94 @@ Or bind conversation per buffer or per `eclaw-folder`. Goals: multiple simultane
 ### 3. Stronger edit tools (optional)
 
 Bounded `write_file` / patch tool under the same path discipline as `notes_write_text`—not started; higher risk than read-only tools.
+
+### 5. Web Push notifications — Milestone ✓
+
+**Status:** done. Chrome **Web Push** for the browser chat UI: user-initiated subscribe, notifications with tab closed.
+
+- **`eclaw-notify.el`** — subscription storage, `eclaw-notify-message`, `eclaw-notify-chat-complete` hook from `eclaw-chat`
+- **`scripts/eclaw-web-push.py`** — pywebpush sender (VAPID + payload encryption; not Elisp)
+- **`web/sw.js`** — service worker (`push`, `notificationclick`)
+- **`web/chat.html`** — bell button, `Notification.requestPermission`, `pushManager.subscribe`
+- **`eclaw-web.el`** — `GET /sw.js`, `POST/DELETE /api/push/subscribe`; `push_*` fields in `/api/settings`
+- **Storage:** `<eclaw-folder>/push-subscriptions.json`, `<eclaw-folder>/push-vapid.json`
+- **Smoke:** `scripts/smoke/push-subscribe.el` (`--smoke push-subscribe`)
+- **Cloud setup:** generate VAPID keys, set `eclaw-notify-enabled`, `eclaw-notify-push-program` (venv Python), optional `eclaw-notify-subscribe-secret` — see **README.md**
+
+#### Deployment context (reference)
+
+- Web UI exposed at **`https://example.com/<secret-path>`** via reverse proxy (single user; URL obscurity acceptable).
+- **`eclaw-web-base-path`** and **`ECLAW_WEB_BASE`** in **`web/chat.html`** / **`eclaw-web.el`** already support subpath deploys.
+- **Always-on:** Emacs on the cloud server runs eclaw continuously once started — no separate push relay; Emacs sends pushes when work completes.
+- **External tools OK:** Web Push crypto (VAPID JWT, payload encryption) must **not** be implemented in Elisp. Use Python (`pywebpush`), the Node `web-push` CLI, or any other suitable external tool installable on the cloud server. Prefer the simplest reliable option.
+
+#### Server prerequisites (partial — cloud server, Jul 2026)
+
+System Python on the cloud server was too old for **pywebpush** 2.x (requires Python ≥ 3.10). Installed via **[uv](https://docs.astral.sh/uv/)** instead of upgrading system Python:
+
+- **uv** installed on the cloud server (same user as Emacs).
+- Modern Python installed with uv (e.g. 3.12).
+- Dedicated venv: **`~/.local/share/eclaw-venv`** with **`pywebpush`** installed (`uv pip install pywebpush` or pinned `pywebpush==2.3.0`).
+
+**At implement time:** set **`eclaw-notify-push-program`** (or equivalent) to the venv interpreter, e.g. **`~/.local/share/eclaw-venv/bin/python3`** — use an **absolute path**; non-interactive Emacs may not have `uv` on `PATH`. Verify with:
+
+```bash
+~/.local/share/eclaw-venv/bin/python3 -c "from pywebpush import webpush; print('ok')"
+```
+
+**Operator setup on cloud server:** generate VAPID key pair, enable `eclaw-notify-enabled`, set `eclaw-notify-push-program` to venv Python (see **Server prerequisites** below). Outbound HTTPS to FCM/Mozilla push endpoints must be allowed.
+
+**Why not Elisp crypto:** Emacs exposes digests/MACs/symmetric ciphers via GnuTLS but not ECDSA (ES256) signing or ECDH — both required for Web Push. No maintained Elisp Web Push library; **`jwt.el`** signs HMAC only, not ES256.
+
+#### Architecture
+
+```text
+Browser → POST /api/push/subscribe → eclaw-web.el → push-subscriptions.json
+eclaw-chat finishes → eclaw-notify.el → call-process → external push script → FCM → service worker → showNotification
+```
+
+#### Implemented files
+
+| Piece | File | Notes |
+|-------|------|-------|
+| Service worker | **`web/sw.js`** | `push` + `notificationclick` → open chat URL |
+| Subscribe UI | **`web/chat.html`** | Bell button; register SW at `${ECLAW_WEB_BASE}/sw.js` |
+| Serve SW | **`eclaw-web.el`** | `GET /sw.js`; `Cache-Control: no-store` |
+| Subscribe API | **`eclaw-web.el`** | `POST/DELETE /api/push/subscribe` → `push-subscriptions.json` |
+| Notify module | **`eclaw-notify.el`** | `eclaw-notify-message`; VAPID/subscription paths; subscribe secret |
+| Push sender | **`scripts/eclaw-web-push.py`** | Python + pywebpush via `call-process` |
+| Hook | **`eclaw.el`** | `eclaw-notify-chat-complete` at end of `eclaw-chat` |
+| VAPID keys | `<eclaw-folder>/push-vapid.json` | Generate once; private key never exposed to model |
+| Docs | **`README.md`** | Setup: keys, enable, proxy notes for `sw.js` |
+| Smoke | **`scripts/smoke/push-subscribe.el`** | Parse/store subscription JSON without live FCM |
+
+#### External crypto (implementation stance)
+
+- **Do not** implement Web Push signing/encryption in Emacs Lisp.
+- **Do** thin Elisp wrapper (**`eclaw-notify.el`**) that passes title, body, subscription file, and VAPID key path to an external sender.
+- Acceptable senders (pick one at implement time): Python + `pywebpush` (recommended default; **already on server in `~/.local/share/eclaw-venv`**), Node `web-push` CLI, or any maintained tool handling VAPID + `aes128gcm`.
+- **`eclaw-notify-push-program`** (or similar) `defcustom` points at the venv Python (absolute path); see **Server prerequisites** above.
+
+#### Security
+
+- Subscriptions are device credentials — treat **`push-subscriptions.json`** as sensitive.
+- Optional shared secret on subscribe POST (in init.el) to prevent subscription hijacking if secret URL leaks.
+- Push **send** stays server-side only (Emacs → script → FCM); no public send endpoint.
+- VAPID private key and subscribe secret not in skills or tool-exposed config.
+
+#### Reverse proxy checklist (example.com)
+
+- Proxy `/SECRETPATH/sw.js` and `/SECRETPATH/api/push/*` to Emacs web server.
+- Pass full path prefix to Emacs (**`eclaw-web--strip-base-path`** expects it).
+- Avoid aggressive caching of **`sw.js`**.
+
+#### Out of scope for v1
+
+- Multi-user auth
+- Push when Emacs is not running (not a concern: cloud Emacs is always on)
+- In-tab-only Notification API without service worker
+- Pure-Elisp Web Push crypto
+- **`notify_user`** agent tool (deferred)
 
 ### 4. Emacs introspection tools (read-only) — Milestone 1e ✓
 
@@ -610,16 +711,18 @@ emacs-web-server on `127.0.0.1` (default port 9876):
 
 - `GET /` — chat page; `POST /api/chat` — JSON in/out, calls `eclaw-chat`
 - `GET /api/stats` — token usage JSON (last turn, conversation, Emacs lifetime + start time)
-- `GET /api/settings` — per-tool policy (name, description, risk, enabled)
+- `GET /api/settings` — per-tool policy, model, prompt limits, push config (`push_enabled`, `push_vapid_public_key`)
 - `PATCH /api/settings` (or `POST`) — update tool policy from JSON `{ tools: { ... } }`
+- `GET /sw.js` — service worker (no cache)
+- `POST /api/push/subscribe` / `DELETE /api/push/subscribe` — store/remove browser push subscriptions
 - `POST /api/reset` — `eclaw-reset-conversation`
-- Tool policy panel in **`web/chat.html`** (checkboxes by risk; confirm dialog for dangerous tools)
+- Tool policy panel and **notifications bell** in **`web/chat.html`**
 - Token stats bar in the browser: input/output counts for last turn, current chat (since reset), and cumulative since Emacs start; `/api/chat` and `/api/reset` also return `usage` in the JSON body
 - `M-x eclaw-web-start` / `eclaw-web-stop` / `eclaw-web-open`
 - Shares global `eclaw-conversation` with `*eclaw*`; tool approval `off` in web handler
 - Not auto-loaded: `(require 'eclaw-web)` after emacs-web-server is on `load-path`
 
-Limitations: blocking HTTP, no streaming, no per-client sessions (see Milestone 2).
+Limitations: blocking HTTP, no streaming, no per-client sessions (see Milestone 2). Web Push requires VAPID keys, pywebpush, and `eclaw-notify-enabled` (see Milestone 5 above).
 
 ---
 

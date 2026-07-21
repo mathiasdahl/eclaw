@@ -48,6 +48,7 @@
 (require 'subr-x)
 (require 'web-server)
 (require 'eclaw)
+(require 'eclaw-notify)
 
 (defgroup eclaw-web nil
   "Local web UI for eclaw (emacs-web-server)."
@@ -97,7 +98,10 @@ correctly.  Leave empty when the app is mounted at the site root."
 (declare-function eclaw-conversation-display-messages "eclaw" ())
 (declare-function eclaw-tool-policy-list "eclaw-tools" ())
 (declare-function eclaw-tool-policy-apply-updates "eclaw-tools" (updates))
-(declare-function eclaw--tool-policy-file "eclaw-tools" ())
+(declare-function eclaw-notify-add-subscription "eclaw-notify" (sub))
+(declare-function eclaw-notify-remove-subscription "eclaw-notify" (endpoint))
+(declare-function eclaw-notify-subscribe-secret-valid-p "eclaw-notify" (secret))
+(declare-function eclaw-notify-vapid-public-key "eclaw-notify" ())
 
 (defun eclaw-web--data-dir ()
   "Return the directory holding static web assets (`web/' under the eclaw repo)."
@@ -117,11 +121,12 @@ correctly.  Leave empty when the app is mounted at the site root."
   (expand-file-name (concat "web/" name) (eclaw-web--data-dir)))
 
 (defun eclaw-web--check-assets ()
-  "Signal an error unless `web/chat.html' exists under `eclaw-web--data-dir'."
-  (let ((chat-html (eclaw-web--asset-path "chat.html")))
-    (unless (file-readable-p chat-html)
-      (error "eclaw-web: missing %s; set `eclaw-web-root' to the eclaw repo directory"
-             chat-html))))
+  "Signal an error unless required files exist under `eclaw-web--data-dir'/web/."
+  (dolist (name '("chat.html" "sw.js"))
+    (let ((path (eclaw-web--asset-path name)))
+      (unless (file-readable-p path)
+        (error "eclaw-web: missing %s; set `eclaw-web-root' to the eclaw repo directory"
+               path)))))
 
 (defun eclaw-web--read-file (name)
   "Return the unibyte contents of NAME under `eclaw-web--data-dir'/web/."
@@ -156,12 +161,19 @@ correctly.  Leave empty when the app is mounted at the site root."
          (t stripped))))))
 
 (defun eclaw-web--serve-chat-html ()
-  "Return chat.html with `ECLAW_WEB_BASE' set for subpath reverse-proxy deploys."
-  (replace-regexp-in-string
-   "const ECLAW_WEB_BASE = \"\";"
-   (format "const ECLAW_WEB_BASE = %s;"
-           (json-encode (eclaw-web--base-path-normalized)))
-   (eclaw-web--read-file "chat.html")))
+  "Return chat.html with deploy-specific constants for reverse-proxy setups."
+  (let ((html (eclaw-web--read-file "chat.html")))
+    (setq html
+          (replace-regexp-in-string
+           "const ECLAW_WEB_BASE = \"\";"
+           (format "const ECLAW_WEB_BASE = %s;"
+                   (json-encode (eclaw-web--base-path-normalized)))
+           html))
+    (replace-regexp-in-string
+     "const ECLAW_PUSH_SUBSCRIBE_SECRET = \"\";"
+     (format "const ECLAW_PUSH_SUBSCRIBE_SECRET = %s;"
+             (json-encode (or eclaw-notify-subscribe-secret "")))
+     html)))
 
 (defun eclaw-web--url ()
   (format "http://%s:%d%s/" eclaw-web-host eclaw-web-port
@@ -276,7 +288,9 @@ correctly.  Leave empty when the app is mounted at the site root."
     ("models" . ,(vconcat eclaw-available-models))
     ("model" . ,(eclaw-normalize-model eclaw-model))
     ("max_tokens_per_prompt" . ,eclaw-max-tokens-per-prompt)
-    ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)))
+    ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)
+    ("push_enabled" . ,(if eclaw-notify-enabled t :json-false))
+    ("push_vapid_public_key" . ,(or (eclaw-notify-vapid-public-key) :json-null))))
 (defun eclaw-web--json-bool (value)
   "Normalize JSON boolean VALUE to Emacs t/nil."
   (cond ((eq value :json-false) nil)
@@ -375,14 +389,72 @@ correctly.  Leave empty when the app is mounted at the site root."
     (eclaw-web--json-response process 200 `((ok . true)
                                             (usage . ,(eclaw-usage-stats))))))
 
+(defun eclaw-web--push-subscription-from-body (data)
+  "Return subscription alist from parsed JSON DATA, omitting `secret'."
+  (let (subscription)
+    (dolist (pair data)
+      (unless (string= (car pair) "secret")
+        (push pair subscription)))
+    (nreverse subscription)))
+
+(defun eclaw-web--handle-get-sw-js (request)
+  (with-slots (process) request
+    (ws-response-header process 200
+                        '("Content-type" . "application/javascript; charset=utf-8")
+                        '("Cache-Control" . "no-store"))
+    (process-send-string process (eclaw-web--read-file "sw.js"))))
+
+(defun eclaw-web--handle-post-push-subscribe (request)
+  (with-slots (process body) request
+    (condition-case err
+        (let* ((data (eclaw-web--parse-json-body-string-keys body))
+               (secret (cdr (assoc-string "secret" data)))
+               (subscription (eclaw-web--push-subscription-from-body data)))
+          (cond
+           ((not (eclaw-notify-subscribe-secret-valid-p secret))
+            (eclaw-web--json-response process 403 '(("error" . "invalid subscribe secret"))))
+           ((not (eclaw-notify-vapid-public-key))
+            (eclaw-web--json-response
+             process 503 '(("error" . "push not configured on server"))))
+           (t
+            (eclaw-notify-add-subscription subscription)
+            (eclaw-web--json-response process 200 '(("ok" . true))))))
+      (error
+       (eclaw-web--json-response
+        process 400
+        `(("error" . ,(error-message-string err))))))))
+
+(defun eclaw-web--handle-delete-push-subscribe (request)
+  (with-slots (process body) request
+    (condition-case err
+        (let* ((data (eclaw-web--parse-json-body-string-keys body))
+               (secret (cdr (assoc-string "secret" data)))
+               (endpoint (cdr (assoc-string "endpoint" data))))
+          (cond
+           ((not (eclaw-notify-subscribe-secret-valid-p secret))
+            (eclaw-web--json-response process 403 '(("error" . "invalid subscribe secret"))))
+           ((not (and endpoint (stringp endpoint) (not (string-empty-p endpoint))))
+            (eclaw-web--json-response process 400 '(("error" . "missing endpoint"))))
+           ((eclaw-notify-remove-subscription endpoint)
+            (eclaw-web--json-response process 200 '(("ok" . true))))
+           (t
+            (eclaw-web--json-response process 404 '(("error" . "subscription not found"))))))
+      (error
+       (eclaw-web--json-response
+        process 400
+        `(("error" . ,(error-message-string err))))))))
+
 (defun eclaw-web--handle-request (request)
   "Route REQUEST to the appropriate handler."
   (let ((get-path (eclaw-web--request-path request :GET))
         (post-path (eclaw-web--request-path request :POST))
-        (patch-path (eclaw-web--request-path request :PATCH)))
+        (patch-path (eclaw-web--request-path request :PATCH))
+        (delete-path (eclaw-web--request-path request :DELETE)))
     (cond
      ((and get-path (string= get-path "/"))
       (eclaw-web--handle-get-index request))
+     ((and get-path (string= get-path "/sw.js"))
+      (eclaw-web--handle-get-sw-js request))
      ((and get-path (string= get-path "/api/stats"))
       (eclaw-web--handle-get-stats request))
      ((and get-path (string= get-path "/api/conversation"))
@@ -395,8 +467,12 @@ correctly.  Leave empty when the app is mounted at the site root."
       (eclaw-web--handle-post-reset request))
      ((and post-path (string= post-path "/api/settings"))
       (eclaw-web--handle-post-settings request))
+     ((and post-path (string= post-path "/api/push/subscribe"))
+      (eclaw-web--handle-post-push-subscribe request))
      ((and patch-path (string= patch-path "/api/settings"))
       (eclaw-web--handle-patch-settings request))
+     ((and delete-path (string= delete-path "/api/push/subscribe"))
+      (eclaw-web--handle-delete-push-subscribe request))
      (t (ws-send-404 (ws-process request))))))
 
 ;;;###autoload

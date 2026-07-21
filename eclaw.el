@@ -59,11 +59,13 @@
 ;;   eclaw-web-search.el — `web_search' and `web_fetch' tools (Jina by default)
 ;;   eclaw-mail.el      — `send_email' tool (work/home only via `mailme-mail')
 ;;   eclaw-eval.el      — `eval_elisp' tool (full session eval; policy-gated)
+;;   eclaw-notify.el    — Web Push notifications (browser chat; external pywebpush)
 ;;
 ;; Load order in `eclaw.el': `(require 'eclaw-skills)' and `(require 'eclaw-preferences)'
 ;; before conversation;
 ;; `(require 'eclaw-tools)', `(require 'eclaw-http)', `(require 'eclaw-web-search)',
-;; `(require 'eclaw-mail)', and `(require 'eclaw-eval)' before `eclaw-build-chat-payload' / `eclaw-chat'.
+;; `(require 'eclaw-mail)', `(require 'eclaw-eval)', and `(require 'eclaw-notify)' before
+;; `eclaw-build-chat-payload' / `eclaw-chat'.
 ;;
 ;; Layers (logical):
 ;;
@@ -522,6 +524,7 @@ CONTENT may be nil; it is stored as an empty string."
 (require 'eclaw-web-search)
 (require 'eclaw-mail)
 (require 'eclaw-eval)
+(require 'eclaw-notify)
 
 (defun eclaw-tool-get-datetime ()
   "Return current wall-clock time and session start for the model."
@@ -588,67 +591,70 @@ Each HTTP exchange is logged."
   (setq eclaw--usage-turn (eclaw--usage-zero))
   (setq eclaw-conversation
         (nconc eclaw-conversation (list (eclaw-user-message prompt))))
-  (let ((messages (eclaw-build-messages))
-        (total-tokens 0)
-        (completions 0))
-    (catch 'eclaw-chat-done
-      (while t
-        (when (>= completions eclaw-max-completions-per-prompt)
-          (let ((msg (concat "[eclaw: stopped — max completions per prompt ("
-                             (number-to-string eclaw-max-completions-per-prompt)
-                             ") reached]")))
-            (eclaw-message "eclaw: %s" msg)
-            (setq eclaw-conversation
-                  (nconc eclaw-conversation
-                         (list (eclaw-assistant-message msg))))
-            (throw 'eclaw-chat-done msg)))
-        (setq completions (1+ completions))
-        (eclaw-progress-message "eclaw: waiting for model (round %d)…" completions)
-        (let* ((payload (eclaw-build-chat-payload messages))
-               (response (eclaw-post-completion-request payload))
-               (usage (alist-get 'usage response)))
-          (eclaw-log payload response)
-          (when usage
-            (eclaw-report-usage usage)
-            (eclaw--usage-accumulate usage))
-          (when-let ((tok (and usage (alist-get 'total_tokens usage))))
-            (setq total-tokens (+ total-tokens tok)))
-          (let* ((tool-calls (eclaw-get-tool-calls response))
-                 (assistant-msg (eclaw-get-message response))
-                 (has-tools (and tool-calls (> (length tool-calls) 0)))
-                 (over-tokens (> total-tokens eclaw-max-tokens-per-prompt))
-                 (synth-reason
-                  (when over-tokens
-                    (concat "cumulative token limit for this prompt exceeded (>"
-                            (number-to-string eclaw-max-tokens-per-prompt)
-                            " total_tokens)"))))
-            (if has-tools
-                (progn
-                  (unless assistant-msg
-                    (error "eclaw: assistant message missing despite tool_calls"))
-                  (setq eclaw-conversation
-                        (nconc eclaw-conversation
-                               (cons (eclaw--normalize-assistant-message
-                                      assistant-msg)
-                                     (eclaw--tool-result-messages
-                                      tool-calls synth-reason))))
-                  (when over-tokens
-                    (let ((note (concat "[eclaw: turn stopped — "
-                                        synth-reason "]")))
-                      (eclaw-message "eclaw: %s" note)
-                      (setq eclaw-conversation
-                            (nconc eclaw-conversation
-                                   (list (eclaw-assistant-message note))))
-                      (throw 'eclaw-chat-done note)))
-                  (setq messages (eclaw-build-messages)))
-              (let ((content (or (eclaw-get-content response) "")))
-                (when over-tokens
-                  (setq content
-                        (concat content
-                                "\n\n[eclaw: cumulative token limit for this prompt exceeded]"))
-                  (eclaw-message "eclaw: token limit exceeded for this prompt"))
-                (eclaw-append-assistant-reply content)
-                (throw 'eclaw-chat-done content)))))))))
+  (let* ((messages (eclaw-build-messages))
+         (total-tokens 0)
+         (completions 0)
+         (reply
+          (catch 'eclaw-chat-done
+            (while t
+             (when (>= completions eclaw-max-completions-per-prompt)
+               (let ((msg (concat "[eclaw: stopped — max completions per prompt ("
+                                   (number-to-string eclaw-max-completions-per-prompt)
+                                   ") reached]")))
+                 (eclaw-message "eclaw: %s" msg)
+                 (setq eclaw-conversation
+                       (nconc eclaw-conversation
+                              (list (eclaw-assistant-message msg))))
+                 (throw 'eclaw-chat-done msg)))
+             (setq completions (1+ completions))
+             (eclaw-progress-message "eclaw: waiting for model (round %d)…" completions)
+             (let* ((payload (eclaw-build-chat-payload messages))
+                    (response (eclaw-post-completion-request payload))
+                    (usage (alist-get 'usage response)))
+               (eclaw-log payload response)
+               (when usage
+                 (eclaw-report-usage usage)
+                 (eclaw--usage-accumulate usage))
+               (when-let ((tok (and usage (alist-get 'total_tokens usage))))
+                 (setq total-tokens (+ total-tokens tok)))
+               (let* ((tool-calls (eclaw-get-tool-calls response))
+                      (assistant-msg (eclaw-get-message response))
+                      (has-tools (and tool-calls (> (length tool-calls) 0)))
+                      (over-tokens (> total-tokens eclaw-max-tokens-per-prompt))
+                      (synth-reason
+                       (when over-tokens
+                         (concat "cumulative token limit for this prompt exceeded (>"
+                                 (number-to-string eclaw-max-tokens-per-prompt)
+                                 " total_tokens)"))))
+                 (if has-tools
+                     (progn
+                       (unless assistant-msg
+                         (error "eclaw: assistant message missing despite tool_calls"))
+                       (setq eclaw-conversation
+                             (nconc eclaw-conversation
+                                    (cons (eclaw--normalize-assistant-message
+                                           assistant-msg)
+                                          (eclaw--tool-result-messages
+                                           tool-calls synth-reason))))
+                       (when over-tokens
+                         (let ((note (concat "[eclaw: turn stopped — "
+                                             synth-reason "]")))
+                           (eclaw-message "eclaw: %s" note)
+                           (setq eclaw-conversation
+                                 (nconc eclaw-conversation
+                                        (list (eclaw-assistant-message note))))
+                           (throw 'eclaw-chat-done note)))
+                       (setq messages (eclaw-build-messages)))
+                   (let ((content (or (eclaw-get-content response) "")))
+                     (when over-tokens
+                       (setq content
+                             (concat content
+                                     "\n\n[eclaw: cumulative token limit for this prompt exceeded]"))
+                       (eclaw-message "eclaw: token limit exceeded for this prompt"))
+                     (eclaw-append-assistant-reply content)
+                     (throw 'eclaw-chat-done content)))))))))
+    (eclaw-notify-chat-complete prompt reply)
+    reply))
 
 (defun eclaw-report-usage (usage)
   "When `eclaw-debug' is non-nil, display token counts from USAGE in the echo area."

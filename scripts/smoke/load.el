@@ -17,6 +17,9 @@
 (unless (featurep 'eclaw-eval)
   (error "smoke load: eclaw-eval feature missing"))
 
+(unless (featurep 'eclaw-notify)
+  (error "smoke load: eclaw-notify feature missing"))
+
 (unless (fboundp 'eclaw-chat)
   (error "smoke load: eclaw-chat not bound"))
 

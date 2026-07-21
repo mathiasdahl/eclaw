@@ -72,9 +72,12 @@ run_smoke() {
     web-settings-json)
       emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/web-settings-json.el"
       ;;
+    push-subscribe)
+      emacs -batch -Q -L "$REPO_ROOT" -l "$SCRIPT_DIR/smoke/push-subscribe.el"
+      ;;
     *)
       echo "eclaw-validate-elisp.sh: unknown smoke test: $name" >&2
-      echo "Known: read-file, load, web-search, session-context, preferences, archive-utf8, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json" >&2
+      echo "Known: read-file, load, web-search, session-context, preferences, archive-utf8, get-datetime, progress-timestamp, send-email, buffer-read, emacs-context, describe-symbol, eval-elisp, web-settings-json, push-subscribe" >&2
       exit 2
       ;;
   esac
@@ -108,7 +111,7 @@ case "$action" in
     ;;
   --compile)
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
+      eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw-notify.el eclaw.el eclaw-web.el
     ;;
   --require)
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
@@ -121,7 +124,7 @@ case "$action" in
     [[ $# -ge 1 ]] || { echo "--all requires at least one FILE" >&2; exit 2; }
     "$VALIDATE" --parens "$@"
     "$VALIDATE" --compile --load-path "$REPO_ROOT" \
-      eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw.el
+      eclaw-skills.el eclaw-preferences.el eclaw-tools.el eclaw-http.el eclaw-web-search.el eclaw-mail.el eclaw-eval.el eclaw-notify.el eclaw.el eclaw-web.el
     "$VALIDATE" --require --load-path "$REPO_ROOT" eclaw
     ;;
   -h|--help)

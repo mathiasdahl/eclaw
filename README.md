@@ -12,7 +12,7 @@ few hours of working with AI to create this project.
 
 Clone the repo and add its directory to `load-path`. All sibling
 `eclaw-*.el` files (`eclaw.el`, `eclaw-skills.el`, `eclaw-preferences.el`, `eclaw-tools.el`,
-`eclaw-http.el`, `eclaw-web-search.el`, `eclaw-mail.el`) must live in that directory; only the core feature
+`eclaw-http.el`, `eclaw-web-search.el`, `eclaw-mail.el`, `eclaw-eval.el`, `eclaw-notify.el`) must live in that directory; only the core feature
 needs to be required:
 
 ```emacs-lisp
@@ -165,3 +165,36 @@ calls resolve paths under `eclaw-folder` (not Emacs's current buffer directory).
 **Security:** do not forward this port or bind to a public interface. While handling
 web requests, `eclaw-tool-approval-mode` is forced to `off`, so local tools run
 without minibuffer prompts—acceptable only on a trusted localhost setup.
+
+### Web Push notifications
+
+Browser notifications when a chat turn completes (tab can be closed). Requires
+[pywebpush](https://github.com/web-push-libs/pywebpush) on the server — not implemented in Elisp.
+
+1. Generate VAPID keys once and save as `<eclaw-folder>/push-vapid.json`:
+
+```json
+{
+  "publicKey": "…",
+  "privateKey": "…",
+  "subject": "mailto:you@example.com"
+}
+```
+
+Use `npx web-push generate-vapid-keys` or the `py_vapid` CLI.
+
+2. Configure in init.el (absolute paths for non-interactive Emacs):
+
+```emacs-lisp
+(setq eclaw-notify-enabled t
+      eclaw-notify-push-program "~/.local/share/eclaw-venv/bin/python3"
+      eclaw-notify-click-url "https://your-host/secret-path/")
+;; Optional: require secret on POST /api/push/subscribe
+(setq eclaw-notify-subscribe-secret "your-random-secret")
+```
+
+3. Start the web UI, open the chat page, click the bell icon, and allow notifications.
+
+Push subscriptions are stored in `<eclaw-folder>/push-subscriptions.json` (treat as sensitive).
+When reverse-proxying a subpath, set `eclaw-web-base-path` and proxy `/path/sw.js` and
+`/path/api/push/*` without caching `sw.js`.
