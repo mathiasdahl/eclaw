@@ -441,6 +441,47 @@ unreadable, or not snapshot format version 1."
     (unless (listp (alist-get 'messages snapshot))
       (error "eclaw: snapshot messages must be a list in %s" file))
     snapshot))
+(defun eclaw--snapshot-turn-count (messages)
+  "Return the number of user turns in snapshot MESSAGES."
+  (length
+   (seq-filter
+    (lambda (msg) (equal (alist-get 'role msg) "user"))
+    (or messages '()))))
+(defun eclaw--snapshot-first-user-content (messages)
+  "Return content of the first user message in snapshot MESSAGES, or nil."
+  (let ((msg (seq-find (lambda (m) (equal (alist-get 'role m) "user"))
+                       messages)))
+    (when msg (alist-get 'content msg))))
+(defun eclaw-list-archived-conversations ()
+  "Return archived conversation metadata, newest first.
+Each element is a plist with keys `file', `started', `ended', `turns',
+`preview', and `restorable' (always t for returned rows).
+Broken snapshot files are skipped; a debug message is logged."
+  (let ((dir (eclaw--conversation-archive-dir))
+        (rows nil))
+    (when (file-directory-p dir)
+      (dolist (name (directory-files dir nil "\\`[^.].*\\.json\\'"))
+        (let ((path (expand-file-name name dir)))
+          (condition-case err
+              (let* ((snapshot (eclaw--conversation-read-snapshot path))
+                     (messages (alist-get 'messages snapshot)))
+                (push (list 'file name
+                            'started (alist-get 'started snapshot)
+                            'ended (alist-get 'ended snapshot)
+                            'turns (eclaw--snapshot-turn-count messages)
+                            'preview (or (eclaw--snapshot-first-user-content messages)
+                                         "")
+                            'restorable t)
+                      rows))
+            (error
+             (eclaw-debug-message "eclaw: skipping broken snapshot %s: %s"
+                                  name (error-message-string err)))))))
+    (sort rows
+          (lambda (a b)
+            (string-lessp (plist-get b 'ended) (plist-get a 'ended))))))
+
+
+
 
 
 
