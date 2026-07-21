@@ -692,6 +692,47 @@
       list-style: none;
     }
 
+    .history-item {
+      padding: 0.55rem 0.65rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin-bottom: 0.45rem;
+    }
+
+    .history-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .history-item-meta {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 0.2rem;
+    }
+
+    .history-item-preview {
+      font-size: 0.9rem;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .history-item-unrestorable .history-item-preview {
+      color: var(--text-dim);
+    }
+
+    .history-state {
+      margin: 0;
+      padding: 0.35rem 0;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
+    .history-state.is-error {
+      color: var(--msg-error-text);
+    }
+
     @keyframes glitchFlicker {
       0%, 100% { opacity: 1; }
       20% { opacity: 0.85; }
@@ -817,6 +858,7 @@
     const loadSessionBtn = document.getElementById("load-session");
     const historyToggleBtn = document.getElementById("history-toggle");
     const historyPanel = document.getElementById("history-panel");
+    const historyListEl = document.getElementById("history-list");
     const settingsToggleBtn = document.getElementById("settings-toggle");
     const pushToggleBtn = document.getElementById("push-toggle");
     const modelSelect = document.getElementById("model-select");
@@ -1642,11 +1684,98 @@
       }
     }
 
+    function formatHistoryTimestamp(iso) {
+      if (!iso || typeof iso !== "string") return "";
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return iso;
+      return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }
+
+    function truncateHistoryPreview(text, maxLen) {
+      const value = String(text || "").trim();
+      if (value.length <= maxLen) return value;
+      return `${value.slice(0, maxLen - 1)}…`;
+    }
+
+    function renderHistoryState(message, isError) {
+      if (!historyListEl) return;
+      historyListEl.innerHTML = "";
+      const li = document.createElement("li");
+      li.className = "history-state" + (isError ? " is-error" : "");
+      li.textContent = message;
+      historyListEl.appendChild(li);
+    }
+
+    function renderHistoryLoading() {
+      renderHistoryState("Loading…", false);
+    }
+
+    function renderHistoryEmpty() {
+      renderHistoryState("No archived conversations yet.", false);
+    }
+
+    function renderHistoryError(message) {
+      renderHistoryState(message || "Could not load conversation history.", true);
+    }
+
+    function renderHistoryList(conversations) {
+      if (!historyListEl) return;
+      historyListEl.innerHTML = "";
+      for (const conv of conversations) {
+        if (!conv || typeof conv !== "object") continue;
+        const li = document.createElement("li");
+        li.className = "history-item";
+        if (conv.restorable === false) {
+          li.classList.add("history-item-unrestorable");
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "history-item-meta";
+        const when = formatHistoryTimestamp(conv.ended || conv.started);
+        const turns = Number(conv.turns);
+        const turnsLabel =
+          Number.isFinite(turns) && turns > 0
+            ? `${turns} turn${turns === 1 ? "" : "s"}`
+            : "";
+        meta.textContent = [when, turnsLabel].filter(Boolean).join(" · ");
+
+        const preview = document.createElement("div");
+        preview.className = "history-item-preview";
+        preview.textContent = truncateHistoryPreview(conv.preview, 120) || "(no preview)";
+
+        li.appendChild(meta);
+        li.appendChild(preview);
+        historyListEl.appendChild(li);
+      }
+    }
+
+    async function loadHistoryList() {
+      if (!historyListEl) return;
+      renderHistoryLoading();
+      try {
+        const { data } = await apiFetch("api/conversations");
+        if (!Array.isArray(data)) {
+          renderHistoryError("Unexpected response from server.");
+          return;
+        }
+        if (data.length === 0) {
+          renderHistoryEmpty();
+        } else {
+          renderHistoryList(data);
+        }
+      } catch (err) {
+        renderHistoryError(String(err));
+      }
+    }
+
     function setHistoryPanelOpen(open) {
       if (!historyPanel || !historyToggleBtn) return;
       historyPanel.hidden = !open;
       historyToggleBtn.classList.toggle("active", open);
       historyToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        loadHistoryList();
+      }
     }
 
     if (historyToggleBtn && historyPanel) {
