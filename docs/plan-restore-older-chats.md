@@ -17,7 +17,7 @@ Mark steps done here as you go:
 - [x] **2a** — `eclaw--conversation-read-snapshot`
 - [x] **2b** — `eclaw-list-archived-conversations`
 - [x] **2c** — `eclaw-restore-conversation`
-- [ ] **2d** — Smoke: `conversation-restore`
+- [x] **2d** — Smoke: `conversation-restore`
 - [ ] **3a** — `GET /api/conversations`
 - [ ] **3b** — `POST /api/conversations/restore`
 - [ ] **4a** — History panel shell (`web/chat.html`)
