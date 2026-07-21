@@ -663,6 +663,35 @@
       color: var(--msg-error-text);
     }
 
+    #history-panel {
+      margin-bottom: 0.75rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--msg-assistant-bg);
+    }
+
+    #history-panel[hidden] {
+      display: none;
+    }
+
+    #history-panel h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1rem;
+    }
+
+    #history-panel .history-intro {
+      margin: 0 0 0.75rem;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
+    #history-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
     @keyframes glitchFlicker {
       0%, 100% { opacity: 1; }
       20% { opacity: 0.85; }
@@ -696,6 +725,12 @@
         <svg class="toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
           <path d="M21 3v6h-6"/>
+        </svg>
+      </button>
+      <button type="button" id="history-toggle" class="toolbar-btn-icon" aria-label="Conversation history" title="Conversation history">
+        <svg class="toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
         </svg>
       </button>
       <button type="button" id="settings-toggle" class="toolbar-btn-icon" aria-label="Settings" title="Settings">
@@ -759,6 +794,11 @@
         <span id="settings-status" aria-live="polite"></span>
       </div>
     </section>
+    <section id="history-panel" hidden aria-label="Conversation history">
+      <h2>Conversation history</h2>
+      <p class="history-intro">Archived conversations from “New conversation”. Select one to restore.</p>
+      <ul id="history-list"></ul>
+    </section>
     <div id="messages" aria-live="polite"></div>
     <div id="usage-stats" aria-live="polite" aria-label="Token usage"></div>
     <form id="form">
@@ -775,6 +815,8 @@
     const sendBtn = document.getElementById("send");
     const resetBtn = document.getElementById("reset");
     const loadSessionBtn = document.getElementById("load-session");
+    const historyToggleBtn = document.getElementById("history-toggle");
+    const historyPanel = document.getElementById("history-panel");
     const settingsToggleBtn = document.getElementById("settings-toggle");
     const pushToggleBtn = document.getElementById("push-toggle");
     const modelSelect = document.getElementById("model-select");
@@ -1076,6 +1118,7 @@
       sendBtn.disabled = busy;
       resetBtn.disabled = busy;
       loadSessionBtn.disabled = busy;
+      if (historyToggleBtn) historyToggleBtn.disabled = busy;
       settingsToggleBtn.disabled = busy;
       if (pushToggleBtn) pushToggleBtn.disabled = busy || pushBusy;
       settingsSaveBtn.disabled = busy;
@@ -1597,6 +1640,21 @@
       } catch (err) {
         setSettingsStatus(String(err), true);
       }
+    }
+
+    function setHistoryPanelOpen(open) {
+      if (!historyPanel || !historyToggleBtn) return;
+      historyPanel.hidden = !open;
+      historyToggleBtn.classList.toggle("active", open);
+      historyToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    if (historyToggleBtn && historyPanel) {
+      historyToggleBtn.setAttribute("aria-expanded", "false");
+      historyToggleBtn.setAttribute("aria-controls", "history-panel");
+      historyToggleBtn.addEventListener("click", () => {
+        setHistoryPanelOpen(historyPanel.hidden);
+      });
     }
 
     settingsToggleBtn.addEventListener("click", async () => {

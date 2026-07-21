@@ -20,7 +20,7 @@ Mark steps done here as you go:
 - [x] **2d** — Smoke: `conversation-restore`
 - [x] **3a** — `GET /api/conversations`
 - [x] **3b** — `POST /api/conversations/restore`
-- [ ] **4a** — History panel shell (`web/chat.html`)
+- [x] **4a** — History panel shell (`web/chat.html`)
 - [ ] **4b** — Fetch and render list
 - [ ] **4c** — Restore action + confirm
 - [ ] **4d** — Rename "Load session" button
