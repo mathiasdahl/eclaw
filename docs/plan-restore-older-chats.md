@@ -13,7 +13,7 @@ Mark steps done here as you go:
 - [x] **1a** — Snapshot path helper + format spec (`eclaw.el`)
 - [x] **1b** — `eclaw--conversation-write-snapshot` (not wired yet)
 - [x] **1c** — Wire snapshot into `eclaw-archive-current-conversation`
-- [ ] **1d** — Smoke: `conversation-snapshot-write`
+- [x] **1d** — Smoke: `conversation-snapshot-write`
 - [ ] **2a** — `eclaw--conversation-read-snapshot`
 - [ ] **2b** — `eclaw-list-archived-conversations`
 - [ ] **2c** — `eclaw-restore-conversation`
