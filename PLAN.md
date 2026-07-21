@@ -46,7 +46,7 @@ Implementation: Emacs Lisp modules plus **`eclaw-web.el`** (optional web UI) and
 - **Message builders:** `eclaw-system-message`, `eclaw-user-message`, `eclaw-assistant-message`, `eclaw-tool-message`
 - **System prompt:** `eclaw-system-prompt` (global persona and cross-cutting rules only) plus optional agent skills index block plus **session context block** (session-start date only, frozen for the chat session; wall-clock time via `get_datetime`; see [`docs/session-context.md`](docs/session-context.md)). Per-tool purpose, constraints, and workflow live in `eclaw-deftool` descriptions (API `tools` array), not duplicated in the system prompt.
 - **Session start:** `eclaw--ensure-session-started` in `eclaw-chat` sets `eclaw--session-started` on first turn; cleared by `eclaw-reset-conversation`
-- **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`, `eclaw-save-conversation`, `eclaw-list-conversations`, `eclaw-open-conversation`
+- **Entrypoints:** `eclaw-chat`, `eclaw-agent-chat`, `eclaw-reset-conversation`, `eclaw-explain-buffer`, `eclaw-save-conversation`, `eclaw-list-conversations`, `eclaw-open-conversation`, `eclaw-list-archived-conversations`, `eclaw-restore-conversation`
 
 ## Tool calling (OpenAI/OpenRouter shape)
 
@@ -164,7 +164,7 @@ Implementation: Emacs Lisp modules plus **`eclaw-web.el`** (optional web UI) and
 - **Data root:** `eclaw-folder` (default `~/.eclaw/`); all paths below are relative to it
 - JSONL log: `eclaw-log.jsonl` (`eclaw--agent-log-file`)
 - One line per HTTP exchange: timestamp, model, request, response
-- **Conversation archives:** Markdown files under `conversations/`; written on `eclaw-reset-conversation` (when non-empty) or `eclaw-save-conversation`; YAML frontmatter (`folder:` records `eclaw-folder`) + `*eclaw*` transcript + optional collapsible tool appendix (`eclaw-archive-include-tools`); browse via `eclaw-list-conversations` (Dired) or `eclaw-open-conversation`
+- **Conversation archives:** paired `.md` + `.json` under `conversations/`; written on `eclaw-reset-conversation` (when non-empty) or `eclaw-save-conversation` (Markdown only for manual save). Markdown: YAML frontmatter (`folder:` records `eclaw-folder`) + `*eclaw*` transcript + optional collapsible tool appendix (`eclaw-archive-include-tools`). JSON snapshot (v1): full `eclaw-conversation` trace (user, assistant with `tool_calls`, tool messages), session metadata, usage — written alongside Markdown on reset. Browse Markdown via `eclaw-list-conversations` (Dired) or `eclaw-open-conversation`; list/restore JSON via `eclaw-list-archived-conversations` and `eclaw-restore-conversation` (archives current session first if non-empty). **Web UI:** history panel lists snapshots; **Emacs restore UI** (beyond `M-x eclaw-restore-conversation`) deferred. Legacy Markdown-only archives are not restorable.
 - UI: append-only buffer `*eclaw*`; token usage in echo area when `eclaw-debug` is non-nil
 - Echo area: short tool-dispatch lines always; HTTP progress, token counts, and index reloads only when `eclaw-debug` is non-nil (`M-x eclaw-toggle-debug`, or `M-x customize-variable RET eclaw-debug RET`)
 
@@ -279,6 +279,15 @@ Tool result:
 - **`eclaw-notify.el`**, **`scripts/eclaw-web-push.py`**, **`web/sw.js`**; subscribe API and bell UI in **`eclaw-web.el`** / **`web/chat.html`**
 - Notify on **`eclaw-chat`** completion; pywebpush on server (not Elisp crypto)
 - Smoke: `scripts/smoke/push-subscribe.el`
+
+## Conversation restore ✓
+
+- **Archive:** `eclaw-archive-current-conversation` writes `.md` + `.json` on reset (JSON failure aborts archive)
+- **Read/list/restore:** `eclaw--conversation-read-snapshot`, `eclaw-list-archived-conversations`, `eclaw-restore-conversation` in **`eclaw.el`**
+- **Web API:** `GET /api/conversations`, `POST /api/conversations/restore` in **`eclaw-web.el`**
+- **Web UI:** history panel in **`web/chat.html`** (fetch list, confirm, restore, render messages)
+- **Smoke:** `scripts/smoke/conversation-snapshot-write.el`, `scripts/smoke/conversation-restore.el`
+- **Deferred:** richer Emacs UI for browsing/restoring archives (Dired on `.json`, dedicated buffer, etc.)
 
 ## Tool call approval ✓
 
@@ -717,6 +726,9 @@ emacs-web-server on `127.0.0.1` (default port 9876):
 - `GET /sw.js` — service worker (no cache)
 - `POST /api/push/subscribe` / `DELETE /api/push/subscribe` — store/remove browser push subscriptions
 - `POST /api/reset` — `eclaw-reset-conversation`
+- `GET /api/conversations` — archived snapshot metadata (newest first)
+- `POST /api/conversations/restore` — body `{ "file": "….json" }` → `eclaw-restore-conversation`; returns `{ messages, usage }`
+- **Conversation history** panel (clock icon) and **Sync live session** button in **`web/chat.html`** (distinct from archive restore)
 - Tool policy panel and **notifications bell** in **`web/chat.html`**
 - Token stats bar in the browser: input/output counts for last turn, current chat (since reset), and cumulative since Emacs start; `/api/chat` and `/api/reset` also return `usage` in the JSON body
 - `M-x eclaw-web-start` / `eclaw-web-stop` / `eclaw-web-open`

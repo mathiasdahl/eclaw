@@ -45,6 +45,12 @@ conversation archives in `conversations/`, notes in `notes/`, agent skills in
 and tool-approval rules in `tool-approval-rules.el`. See [`docs/skills.md`](docs/skills.md)
 and [`docs/preferences.md`](docs/preferences.md).
 
+When you start a new conversation (`M-x eclaw-reset-conversation` or the web
+**New conversation** button), a non-empty session is archived under
+`conversations/` as both Markdown (human-readable transcript) and JSON (full API
+trace including tool calls). JSON snapshots can be restored later; legacy
+Markdown-only archives cannot.
+
 ```emacs-lisp
 (setq eclaw-folder (expand-file-name "~/my-eclaw/"))
 ```
@@ -161,6 +167,15 @@ with a missing `web/chat.html`, set `eclaw-web-root` to your eclaw clone:
 The web UI calls the same `eclaw-chat` orchestration as `M-x eclaw-agent-chat` and
 shares global `eclaw-conversation` with the `*eclaw*` buffer. Filesystem tool
 calls resolve paths under `eclaw-folder` (not Emacs's current buffer directory).
+
+**Conversation history:** the clock icon opens archived sessions from
+`conversations/*.json`. Click a row to restore that snapshot into the live chat
+(if the current chat has messages, you are asked to confirm first). The
+**Sync live session** button reloads the in-memory Emacs session from
+`GET /api/conversation` — it does not read archives from disk.
+
+Programmatic restore from Emacs: `M-x eclaw-restore-conversation` (basename of a
+`.json` file under `conversations/`).
 
 **Security:** do not forward this port or bind to a public interface. While handling
 web requests, `eclaw-tool-approval-mode` is forced to `off`, so local tools run
