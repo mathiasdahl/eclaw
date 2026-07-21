@@ -96,6 +96,7 @@ correctly.  Leave empty when the app is mounted at the site root."
 (declare-function eclaw--folder "eclaw" ())
 (declare-function eclaw-usage-stats "eclaw" ())
 (declare-function eclaw-conversation-display-messages "eclaw" ())
+(declare-function eclaw-list-archived-conversations "eclaw" ())
 (declare-function eclaw-tool-policy-list "eclaw-tools" ())
 (declare-function eclaw-tool-policy-apply-updates "eclaw-tools" (updates))
 (declare-function eclaw-notify-add-subscription "eclaw-notify" (sub))
@@ -270,6 +271,29 @@ correctly.  Leave empty when the app is mounted at the site root."
      process 200
      `((messages . ,(eclaw-conversation-display-messages))
        (usage . ,(eclaw-usage-stats))))))
+
+(defun eclaw-web--archived-conversations-json ()
+  "Return archived conversation rows as JSON-friendly alists with string keys."
+  (mapcar
+   (lambda (row)
+     `(("file" . ,(plist-get row 'file))
+       ("started" . ,(plist-get row 'started))
+       ("ended" . ,(plist-get row 'ended))
+       ("turns" . ,(plist-get row 'turns))
+       ("preview" . ,(plist-get row 'preview))
+       ("restorable" . ,(plist-get row 'restorable))))
+   (eclaw-list-archived-conversations)))
+
+(defun eclaw-web--handle-get-conversations (request)
+  (with-slots (process) request
+    (let ((json-object-type 'alist)
+          (json-array-type 'list)
+          (json-key-type 'string))
+      (ws-response-header process 200
+                          '("Content-type" . "application/json")
+                          '("Cache-Control" . "no-store"))
+      (process-send-string process
+                           (json-encode (eclaw-web--archived-conversations-json))))))
 
 (defun eclaw-web--tool-policy-json ()
   "Return tool policy rows as JSON-friendly alists with string keys."
@@ -478,6 +502,8 @@ correctly.  Leave empty when the app is mounted at the site root."
       (eclaw-web--handle-get-stats request))
      ((and get-path (string= get-path "/api/conversation"))
       (eclaw-web--handle-get-conversation request))
+     ((and get-path (string= get-path "/api/conversations"))
+      (eclaw-web--handle-get-conversations request))
      ((and get-path (string= get-path "/api/settings"))
       (eclaw-web--handle-get-settings request))
      ((and post-path (string= post-path "/api/chat"))
