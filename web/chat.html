@@ -1742,26 +1742,8 @@
       renderHistoryState(message || "Could not load conversation history.", true);
     }
 
-    function chatHasContent() {
-      return messagesEl.querySelector(".msg.user, .msg.assistant") != null;
-    }
-
     async function restoreConversation(file) {
       if (chatBusy || !file) return;
-      const needsConfirm =
-        chatHasContent() &&
-        !(sessionRestoredFrom && !sessionDirty);
-      if (needsConfirm) {
-        let confirmText;
-        if (sessionRestoredFrom && sessionDirty) {
-          confirmText =
-            "Restore this archived conversation?\n\nChanges to the current chat will be saved back to its archive first.";
-        } else {
-          confirmText =
-            "Restore this archived conversation?\n\nYour current chat will be archived first.";
-        }
-        if (!window.confirm(confirmText)) return;
-      }
       setBusy(true);
       try {
         const { ok, data } = await postJson("api/conversations/restore", { file });
