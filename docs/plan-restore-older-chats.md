@@ -23,7 +23,7 @@ Mark steps done here as you go:
 - [x] **4a** — History panel shell (`web/chat.html`)
 - [x] **4b** — Fetch and render list
 - [x] **4c** — Restore action + confirm
-- [ ] **4d** — Rename "Load session" button
+- [x] **4d** — Rename "Load session" button
 - [ ] **5** — README + PLAN overview (then delete this file)
 
 ## Current gap
