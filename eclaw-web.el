@@ -271,7 +271,9 @@ correctly.  Leave empty when the app is mounted at the site root."
     (eclaw-web--json-response
      process 200
      `((messages . ,(eclaw-conversation-display-messages))
-       (usage . ,(eclaw-usage-stats))))))
+       (usage . ,(eclaw-usage-stats))
+       (restored_from . ,(or eclaw--restored-from-file :json-false))
+       (session_dirty . ,(if eclaw--session-dirty-p t :json-false)))))
 
 (defun eclaw-web--archived-conversations-json ()
   "Return archived conversation rows as JSON-friendly alists with string keys."
@@ -308,7 +310,9 @@ correctly.  Leave empty when the app is mounted at the site root."
                 (eclaw-web--json-response
                  process 200
                  `((messages . ,(eclaw-conversation-display-messages))
-                   (usage . ,(eclaw-usage-stats)))))
+                   (usage . ,(eclaw-usage-stats))
+                   (restored_from . ,file)
+                   (session_dirty . :json-false))))
             (eclaw-web--json-response
              process 400
              '(("error" . "missing or empty \"file\"")))))

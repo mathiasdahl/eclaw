@@ -276,6 +276,12 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 (defvar eclaw--session-started nil
   "Start time of the current archivable session, or nil after reset.")
 
+(defvar eclaw--restored-from-file nil
+  "Basename of the JSON snapshot loaded by `eclaw-restore-conversation', or nil.")
+
+(defvar eclaw--session-dirty-p nil
+  "Non-nil when the user has continued a restored session since load.")
+
 (defun eclaw--usage-zero ()
   "Return a fresh usage alist with zero prompt and completion tokens."
   '((prompt_tokens . 0) (completion_tokens . 0)))
@@ -522,7 +528,8 @@ Broken snapshot files are skipped; a debug message is logged."
 (defun eclaw-restore-conversation (file)
   "Restore archived conversation FILE into the live session.
 FILE is the snapshot basename under `eclaw-folder'/`conversations/'.
-When the current session has content, archive it first."
+When the current session has content, persist it first: discard if it is
+an unchanged restore, update in place when continued, otherwise archive."
   (interactive
    (let* ((archives (eclaw-list-archived-conversations))
           (candidates
@@ -542,14 +549,7 @@ When the current session has content, archive it first."
      (list (completing-read "Restore conversation: " candidates nil t))))
   (unless (eclaw--valid-snapshot-basename-p file)
     (user-error "Invalid snapshot basename: %s" file))
-  (when (eclaw--session-has-content-p)
-    (condition-case err
-        (let ((path (eclaw-archive-current-conversation)))
-          (unless path
-            (user-error "Archive produced no file"))
-          (eclaw-message "eclaw: current session archived to %s" path))
-      (error
-       (user-error "Archive failed: %s" (error-message-string err)))))
+  (eclaw--finalize-session-before-switch)
   (let* ((path (expand-file-name file (eclaw--conversation-archive-dir)))
          (snapshot (eclaw--conversation-read-snapshot path))
          (started (alist-get 'started snapshot))
@@ -558,6 +558,8 @@ When the current session has content, archive it first."
     (setq eclaw-conversation (copy-tree messages))
     (setq eclaw--session-started (eclaw--parse-iso-timestamp started))
     (setq eclaw--usage-conversation (copy-tree usage))
+    (setq eclaw--restored-from-file file)
+    (setq eclaw--session-dirty-p nil)
     (eclaw--rebuild-eclaw-buffer-from-conversation)
     (eclaw-message "eclaw: conversation restored from %s" file)))
 
@@ -623,6 +625,74 @@ When the current session has content, archive it first."
    (eclaw--folder)
    (eclaw--conversation-turn-count)))
 
+(defun eclaw--clear-live-session ()
+  "Clear the live session in memory without writing an archive."
+  (setq eclaw-conversation nil)
+  (setq eclaw--session-started nil)
+  (setq eclaw--usage-conversation (eclaw--usage-zero))
+  (setq eclaw--restored-from-file nil)
+  (setq eclaw--session-dirty-p nil)
+  (when eclaw-archive-clear-buffer-on-reset
+    (eclaw--clear-eclaw-buffer)))
+
+(defun eclaw--update-archived-conversation (json-basename)
+  "Rewrite archive JSON-BASENAME and its Markdown companion from the live session.
+Return the Markdown file path."
+  (unless (eclaw--valid-snapshot-basename-p json-basename)
+    (error "eclaw: invalid snapshot basename: %s" json-basename))
+  (let* ((json-path (expand-file-name json-basename (eclaw--conversation-archive-dir)))
+         (md-path (replace-regexp-in-string "\\.json\\'" ".md" json-path))
+         (ended (current-time))
+         (transcript (eclaw--conversation-render-transcript))
+         (tools (or (eclaw--conversation-render-tools) ""))
+         (content (concat (eclaw--conversation-archive-frontmatter ended)
+                          transcript
+                          tools))
+         (snapshot `((version . 1)
+                     (id . ,(eclaw--iso-timestamp ended))
+                     (started . ,(if eclaw--session-started
+                                     (eclaw--iso-timestamp eclaw--session-started)
+                                   ""))
+                     (ended . ,(eclaw--iso-timestamp ended))
+                     (model . ,eclaw-model)
+                     (folder . ,(eclaw--folder))
+                     (usage . ,eclaw--usage-conversation)
+                     (messages . ,(or eclaw-conversation '())))))
+    (eclaw--write-utf-8-file content md-path)
+    (eclaw--write-utf-8-file (json-encode snapshot) json-path)
+    md-path))
+
+(defun eclaw--persist-session-before-clear ()
+  "Persist the current session when leaving it.
+Return `discard' when a pristine restored session needs no write,
+the Markdown path when an archive was written or updated, or nil
+when the session is empty."
+  (cond
+   ((not (eclaw--session-has-content-p)) nil)
+   ((and eclaw--restored-from-file (not eclaw--session-dirty-p)) 'discard)
+   ((and eclaw--restored-from-file eclaw--session-dirty-p)
+    (eclaw--update-archived-conversation eclaw--restored-from-file))
+   (t (eclaw-archive-current-conversation))))
+
+(defun eclaw--finalize-session-before-switch ()
+  "Persist, update, or discard the live session before loading another.
+Signals `user-error' when a write was expected but failed."
+  (when (eclaw--session-has-content-p)
+    (condition-case err
+        (let* ((was-updated (and eclaw--restored-from-file eclaw--session-dirty-p))
+               (result (eclaw--persist-session-before-clear)))
+          (pcase result
+            ('discard (eclaw--clear-live-session))
+            ((pred stringp)
+             (if was-updated
+                 (eclaw-message "eclaw: conversation updated in %s"
+                                (file-name-nondirectory result))
+               (eclaw-message "eclaw: conversation archived to %s" result))
+             (eclaw--clear-live-session))
+            (_ (user-error "Archive produced no file"))))
+      (error
+       (user-error "Archive failed: %s" (error-message-string err))))))
+
 (defun eclaw-archive-current-conversation ()
   "Save the current session to Markdown and JSON under `eclaw-folder'/`conversations/'.
 Return the written Markdown file path, or nil when there is nothing to archive."
@@ -652,21 +722,10 @@ Return the written Markdown file path, or nil when there is nothing to archive."
 
 (defun eclaw-reset-conversation ()
   "Archive the current session, clear `eclaw-conversation', and start fresh.
+Unchanged restored sessions are discarded; continued restores update in place.
 When archiving fails, the session is left unchanged."
   (interactive)
-  (when (eclaw--session-has-content-p)
-    (condition-case err
-        (let ((path (eclaw-archive-current-conversation)))
-          (unless path
-            (user-error "Archive produced no file"))
-          (eclaw-message "eclaw: conversation archived to %s" path))
-      (error
-       (user-error "Archive failed: %s" (error-message-string err)))))
-  (setq eclaw-conversation nil)
-  (setq eclaw--session-started nil)
-  (setq eclaw--usage-conversation (eclaw--usage-zero))
-  (when eclaw-archive-clear-buffer-on-reset
-    (eclaw--clear-eclaw-buffer))
+  (eclaw--finalize-session-before-switch)
   (eclaw-message "eclaw conversation reset"))
 
 (defun eclaw-system-message ()
@@ -792,6 +851,8 @@ The user turn is appended to `eclaw-conversation' before the first
 request so history matches what was sent even when a request fails.
 Each HTTP exchange is logged."
   (eclaw--ensure-session-started)
+  (when eclaw--restored-from-file
+    (setq eclaw--session-dirty-p t))
   (setq eclaw--usage-turn (eclaw--usage-zero))
   (setq eclaw-conversation
         (nconc eclaw-conversation (list (eclaw-user-message prompt))))
@@ -934,14 +995,24 @@ PROMPT is read interactively when called as a command."
     (buffer-string))))
 
 (defun eclaw-save-conversation ()
-  "Save the current eclaw session to a Markdown archive file."
+  "Save the current eclaw session to a Markdown archive file.
+Continued restores update their source archive in place."
   (interactive)
   (if (eclaw--session-has-content-p)
       (condition-case err
-          (let ((path (eclaw-archive-current-conversation)))
-            (if path
-                (eclaw-message "eclaw: conversation saved to %s" path)
-              (user-error "Archive produced no file")))
+          (let* ((was-updated (and eclaw--restored-from-file eclaw--session-dirty-p))
+                 (result (eclaw--persist-session-before-clear)))
+            (pcase result
+              ('discard
+               (user-error "No changes to save since restore"))
+              ((pred stringp)
+               (when was-updated
+                 (setq eclaw--session-dirty-p nil))
+               (if was-updated
+                   (eclaw-message "eclaw: conversation updated in %s"
+                                  (file-name-nondirectory result))
+                 (eclaw-message "eclaw: conversation saved to %s" result)))
+              (_ (user-error "Archive produced no file"))))
         (error
          (user-error "Archive failed: %s" (error-message-string err))))
     (user-error "No conversation to save")))
@@ -994,7 +1065,8 @@ PROMPT is read interactively when called as a command."
   "Archive the current session on Emacs exit when configured."
   (when (and eclaw-archive-on-kill-emacs (eclaw--session-has-content-p))
     (condition-case nil
-        (eclaw-archive-current-conversation)
+        (let ((result (eclaw--persist-session-before-clear)))
+          (unless (eq result 'discard) result))
       (error nil))))
 
 (add-hook 'kill-emacs-hook #'eclaw--maybe-archive-on-kill-emacs)

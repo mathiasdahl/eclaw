@@ -1013,7 +1013,16 @@
         }
       }
       if (data.usage) renderUsageStats(data.usage);
+      if (typeof data.restored_from === "string" && data.restored_from) {
+        sessionRestoredFrom = data.restored_from;
+      } else {
+        sessionRestoredFrom = null;
+      }
+      sessionDirty = data.session_dirty === true;
     }
+
+    let sessionRestoredFrom = null;
+    let sessionDirty = false;
 
     async function loadSession(options) {
       const quiet = options && options.quiet;
@@ -1740,10 +1749,18 @@
     async function restoreConversation(file) {
       if (chatBusy || !file) return;
       if (chatHasContent()) {
-        const ok = window.confirm(
-          "Restore this archived conversation?\n\nYour current chat will be archived first."
-        );
-        if (!ok) return;
+        let confirmText;
+        if (sessionRestoredFrom && !sessionDirty) {
+          confirmText =
+            "Switch to this archived conversation?\n\nYour current chat will be discarded (not saved).";
+        } else if (sessionRestoredFrom && sessionDirty) {
+          confirmText =
+            "Restore this archived conversation?\n\nChanges to the current chat will be saved back to its archive first.";
+        } else {
+          confirmText =
+            "Restore this archived conversation?\n\nYour current chat will be archived first.";
+        }
+        if (!window.confirm(confirmText)) return;
       }
       setBusy(true);
       try {
@@ -1869,6 +1886,7 @@
       if (!message) return;
       promptEl.value = "";
       addMessage(message, "user");
+      if (sessionRestoredFrom) sessionDirty = true;
       setBusy(true);
       const status = addMessage(themeCopy("thinking"), "status");
       try {
@@ -1895,6 +1913,8 @@
         const { ok, data } = await postJson("api/reset", {});
         if (ok && data.ok) {
           messagesEl.innerHTML = "";
+          sessionRestoredFrom = null;
+          sessionDirty = false;
           addMessage(themeCopy("resetOk"), "status");
           if (data.usage) renderUsageStats(data.usage);
         } else {
