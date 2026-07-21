@@ -468,13 +468,12 @@ Return the written file path."
    (eclaw--conversation-turn-count)))
 
 (defun eclaw-archive-current-conversation ()
-  "Save the current session to a Markdown file under `eclaw-folder'/`conversations/'.
-Return the written file path, or nil when there is nothing to archive."
+  "Save the current session to Markdown and JSON under `eclaw-folder'/`conversations/'.
+Return the written Markdown file path, or nil when there is nothing to archive."
   (when (eclaw--session-has-content-p)
     (let* ((ended (current-time))
-           (path (eclaw--conversation-archive-path
-                  ended
-                  (eclaw--conversation-slug (eclaw--conversation-first-prompt))))
+           (slug (eclaw--conversation-slug (eclaw--conversation-first-prompt)))
+           (path (eclaw--conversation-archive-path ended slug))
            (dir (file-name-directory path))
            (transcript (eclaw--conversation-render-transcript))
            (tools (or (eclaw--conversation-render-tools) ""))
@@ -485,7 +484,9 @@ Return the written file path, or nil when there is nothing to archive."
       (with-temp-file path
         (set-buffer-file-coding-system 'utf-8-unix)
         (insert content))
+      (eclaw--conversation-write-snapshot ended slug)
       path)))
+
 
 (defun eclaw--clear-eclaw-buffer ()
   "Erase buffer `*eclaw*' when it exists, preserving View mode."
