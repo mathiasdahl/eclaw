@@ -292,7 +292,8 @@ correctly.  Leave empty when the app is mounted at the site root."
     ("push_enabled" . ,(if (and eclaw-notify-enabled (eclaw-notify-vapid-public-key))
                           t
                         :json-false))
-    ("push_vapid_public_key" . ,(or (eclaw-notify-vapid-public-key) :json-null))))
+    ("push_vapid_public_key" . ,(or (eclaw-notify-vapid-public-key) :json-null))
+    ("push_on_chat_complete" . ,(if eclaw-notify-on-chat-complete t :json-false))))
 (defun eclaw-web--json-bool (value)
   "Normalize JSON boolean VALUE to Emacs t/nil."
   (cond ((eq value :json-false) nil)
@@ -338,6 +339,14 @@ correctly.  Leave empty when the app is mounted at the site root."
     n))
 
 
+(defun eclaw-web--parse-boolean-setting (value field-name)
+  "Return boolean from JSON VALUE for settings field FIELD-NAME."
+  (let ((enabled (eclaw-web--json-bool value)))
+    (unless (member enabled '(t nil))
+      (error "%s must be a boolean" field-name))
+    enabled))
+
+
 (defun eclaw-web--handle-get-settings (request)
   (with-slots (process) request
     (eclaw-web--json-response process 200 (eclaw-web--settings-response-alist))))
@@ -349,8 +358,11 @@ correctly.  Leave empty when the app is mounted at the site root."
                (tools-entry (assoc-string "tools" data))
                (model-entry (assoc-string "model" data))
                (max-tokens-entry (assoc-string "max_tokens_per_prompt" data))
-               (max-completions-entry (assoc-string "max_completions_per_prompt" data)))
-          (if (or tools-entry model-entry max-tokens-entry max-completions-entry)
+               (max-completions-entry (assoc-string "max_completions_per_prompt" data))
+               (push-on-chat-complete-entry
+                (assoc-string "push_on_chat_complete" data)))
+          (if (or tools-entry model-entry max-tokens-entry max-completions-entry
+                  push-on-chat-complete-entry)
               (progn
                 (eclaw-web--with-web-context
                  (lambda ()
@@ -366,6 +378,11 @@ correctly.  Leave empty when the app is mounted at the site root."
                            (eclaw-web--parse-positive-integer
                             (cdr max-completions-entry)
                             "max_completions_per_prompt")))
+                   (when push-on-chat-complete-entry
+                     (setq eclaw-notify-on-chat-complete
+                           (eclaw-web--parse-boolean-setting
+                            (cdr push-on-chat-complete-entry)
+                            "push_on_chat_complete")))
                    (when tools-entry
                      (let ((tools-obj (or (cdr tools-entry) '())))
                        (eclaw-tool-policy-apply-updates

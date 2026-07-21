@@ -2,6 +2,7 @@
 
 (require 'json)
 (require 'eclaw)
+(require 'eclaw-notify)
 
 (defun smoke--assert (label condition)
   (unless condition
@@ -50,6 +51,13 @@
       (error "%s must be a positive integer" field-name))
     n))
 
+(defun smoke--parse-boolean-setting (value field-name)
+  "Mirror `eclaw-web--parse-boolean-setting'."
+  (let ((enabled (smoke--json-bool value)))
+    (unless (member enabled '(t nil))
+      (error "%s must be a boolean" field-name))
+    enabled))
+
 (defun smoke--settings-tools-from-body (body)
   "Mirror tools extraction from `eclaw-web--handle-patch-settings'."
   (let* ((data (json-read-from-string body))
@@ -74,6 +82,12 @@
          (entry (assoc-string "max_completions_per_prompt" data)))
     (when entry (cdr entry))))
 
+(defun smoke--settings-push-on-chat-complete-from-body (body)
+  "Mirror push_on_chat_complete extraction from PATCH settings body."
+  (let* ((data (json-read-from-string body))
+         (entry (assoc-string "push_on_chat_complete" data)))
+    (when entry (cdr entry))))
+
 (defun smoke--settings-response-alist ()
   "Mirror `eclaw-web--settings-response-alist' without web-server."
   `(("tools" . ,(vconcat (smoke--tool-policy-json)))
@@ -81,7 +95,8 @@
     ("models" . ,(vconcat eclaw-available-models))
     ("model" . ,(eclaw-normalize-model eclaw-model))
     ("max_tokens_per_prompt" . ,eclaw-max-tokens-per-prompt)
-    ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)))
+    ("max_completions_per_prompt" . ,eclaw-max-completions-per-prompt)
+    ("push_on_chat_complete" . ,(if eclaw-notify-on-chat-complete t :json-false))))
 
 (let* ((tmpdir (make-temp-file "eclaw-smoke-settings-" t))
        (json-object-type 'alist)
@@ -97,7 +112,8 @@
          (models (cdr (assoc-string "models" encoded)))
          (model (cdr (assoc-string "model" encoded)))
          (max-tokens (cdr (assoc-string "max_tokens_per_prompt" encoded)))
-         (max-completions (cdr (assoc-string "max_completions_per_prompt" encoded))))
+         (max-completions (cdr (assoc-string "max_completions_per_prompt" encoded)))
+         (push-on-chat-complete (cdr (assoc-string "push_on_chat_complete" encoded))))
     (smoke--assert "tools is a list"
                    (listp tools))
     (smoke--assert "tools is non-empty"
@@ -110,6 +126,8 @@
                    (and (integerp max-tokens) (> max-tokens 0)))
     (smoke--assert "max_completions_per_prompt is positive integer"
                    (and (integerp max-completions) (> max-completions 0)))
+    (smoke--assert "push_on_chat_complete is boolean not null"
+                   (member push-on-chat-complete '(t :json-false)))
     (let* ((first (car tools))
            (name (cdr (assoc-string "name" first)))
            (risk (cdr (assoc-string "risk" first)))
@@ -153,4 +171,13 @@
     (smoke--assert "prompt limit update applies to eclaw-max-completions-per-prompt"
                    (= eclaw-max-completions-per-prompt 8)))
 
-(message "smoke web-settings-json: OK")
+  (let* ((body "{\"push_on_chat_complete\":false}")
+         (value (smoke--settings-push-on-chat-complete-from-body body)))
+    (smoke--assert "PATCH body exposes push_on_chat_complete"
+                   (eq value :json-false))
+    (setq eclaw-notify-on-chat-complete
+          (smoke--parse-boolean-setting value "push_on_chat_complete"))
+    (smoke--assert "push_on_chat_complete update applies to eclaw-notify-on-chat-complete"
+                   (not eclaw-notify-on-chat-complete)))
+
+  (message "smoke web-settings-json: OK"))

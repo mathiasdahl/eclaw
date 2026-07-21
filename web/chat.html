@@ -704,7 +704,7 @@
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
       </button>
-      <button type="button" id="push-toggle" class="toolbar-btn-icon" aria-label="Enable notifications" title="Enable notifications" hidden>
+      <button type="button" id="push-toggle" class="toolbar-btn-icon" aria-label="Subscribe to notifications" title="Subscribe to notifications" hidden>
         <svg class="toolbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
           <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
@@ -738,6 +738,16 @@
             <span class="settings-limit-desc">Maximum HTTP round-trips per user message, including tool follow-ups.</span>
           </label>
           <input type="number" id="max-completions-per-prompt" min="1" step="1" inputmode="numeric" aria-label="Max completions per prompt" />
+        </div>
+      </div>
+      <div id="push-settings-group" class="settings-group" hidden>
+        <h3>Notifications</h3>
+        <div class="settings-tool">
+          <label for="push-on-chat-complete">
+            <input type="checkbox" id="push-on-chat-complete" />
+            <span class="settings-tool-name">Notify when agent replies</span>
+            <span class="settings-tool-desc">Send a push notification when a chat turn finishes. Use the bell icon in the toolbar to subscribe this browser to notifications.</span>
+          </label>
         </div>
       </div>
       <h3 class="settings-subheading">Tool policy</h3>
@@ -775,6 +785,8 @@
     const settingsStatusEl = document.getElementById("settings-status");
     const maxTokensPerPromptEl = document.getElementById("max-tokens-per-prompt");
     const maxCompletionsPerPromptEl = document.getElementById("max-completions-per-prompt");
+    const pushSettingsGroupEl = document.getElementById("push-settings-group");
+    const pushOnChatCompleteEl = document.getElementById("push-on-chat-complete");
     const themeSelect = document.getElementById("theme-select");
     const usageStatsEl = document.getElementById("usage-stats");
     const rainCanvas = document.getElementById("matrix-rain");
@@ -1180,12 +1192,12 @@
         const subscription = registration && (await registration.pushManager.getSubscription());
         if (subscription) {
           pushToggleBtn.classList.add("active");
-          pushToggleBtn.title = "Notifications enabled (click to disable)";
-          pushToggleBtn.setAttribute("aria-label", "Disable notifications");
+          pushToggleBtn.title = "Unsubscribe from notifications (click to disable)";
+          pushToggleBtn.setAttribute("aria-label", "Unsubscribe from notifications");
         } else {
           pushToggleBtn.classList.remove("active");
-          pushToggleBtn.title = "Enable notifications";
-          pushToggleBtn.setAttribute("aria-label", "Enable notifications");
+          pushToggleBtn.title = "Subscribe to notifications";
+          pushToggleBtn.setAttribute("aria-label", "Subscribe to notifications");
         }
       } catch (err) {
         console.debug("eclaw: push UI refresh failed:", err.message);
@@ -1342,6 +1354,22 @@
       if (maxCompletionsPerPromptEl && data.max_completions_per_prompt != null) {
         maxCompletionsPerPromptEl.value = String(data.max_completions_per_prompt);
       }
+    }
+
+    function applyPushSettingsToInputs(data) {
+      if (pushSettingsGroupEl) {
+        pushSettingsGroupEl.hidden = !data.push_enabled;
+      }
+      if (pushOnChatCompleteEl && data.push_on_chat_complete != null) {
+        pushOnChatCompleteEl.checked = !!data.push_on_chat_complete;
+      }
+    }
+
+    function readPushSettingsFromInputs() {
+      if (!pushOnChatCompleteEl || (pushSettingsGroupEl && pushSettingsGroupEl.hidden)) {
+        return {};
+      }
+      return { push_on_chat_complete: pushOnChatCompleteEl.checked };
     }
 
     function validatePromptLimits(limits) {
@@ -1520,6 +1548,7 @@
       try {
         const { data } = await apiFetch("api/settings");
         applyPromptLimitsToInputs(data);
+        applyPushSettingsToInputs(data);
         const { tools, error } = normalizeTools(data);
         if (error) {
           if (settingsGroupsEl) settingsGroupsEl.innerHTML = "";
@@ -1550,9 +1579,11 @@
             tools: settingsDraft,
             max_tokens_per_prompt: limits.max_tokens_per_prompt,
             max_completions_per_prompt: limits.max_completions_per_prompt,
+            ...readPushSettingsFromInputs(),
           }),
         });
         applyPromptLimitsToInputs(data);
+        applyPushSettingsToInputs(data);
         const { tools, error } = normalizeTools(data);
         if (error) {
           if (settingsGroupsEl) settingsGroupsEl.innerHTML = "";

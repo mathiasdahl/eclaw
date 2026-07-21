@@ -176,7 +176,7 @@ Chat-complete pings and model-initiated push are configured independently:
 | Variable | Purpose |
 |----------|---------|
 | `eclaw-notify-enabled` | Master switch: subscribe UI and all sends |
-| `eclaw-notify-on-chat-complete` | Push when a chat turn finishes (default `t`) |
+| `eclaw-notify-on-chat-complete` | Push when a chat turn finishes (default `t`); also toggled in web Settings → Notifications (session-only; init.el default on restart) |
 | `eclaw-notify-send-enabled` | Default tool-policy for `send_push` (default `nil`) |
 
 The `send_push` tool sends a notification with `title`, `body`, and optional `url`.
@@ -210,7 +210,7 @@ Use `npx web-push generate-vapid-keys` or the `py_vapid` CLI.
 (setq eclaw-notify-subscribe-secret "your-random-secret")
 ```
 
-3. Start the web UI, open the chat page, click the bell icon, and allow notifications.
+3. Start the web UI, open the chat page, click the bell icon to subscribe this browser, and allow notifications. In **Settings → Notifications**, choose whether eclaw sends a push when the agent replies (separate from the bell subscription).
 
 Push subscriptions are stored in `<eclaw-folder>/push-subscriptions.json` (treat as sensitive).
 When reverse-proxying a subpath, set `eclaw-web-base-path` and proxy `/path/sw.js` and
