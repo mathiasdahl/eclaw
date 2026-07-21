@@ -388,6 +388,32 @@ Skips tool messages and assistant rows with empty content (tool-only rounds)."
                  (format "%s.json" stamp))))
     (expand-file-name name dir)))
 
+(defun eclaw--conversation-write-snapshot (time slug)
+  "Write a JSON snapshot of the current session for TIME and optional SLUG.
+Return the written file path."
+  (let* ((ended time)
+         (path (eclaw--conversation-snapshot-path ended slug))
+         (dir (file-name-directory path))
+         (tmp (make-temp-file "eclaw-snapshot-" nil ".json"))
+         (snapshot `((version . 1)
+                     (id . ,(eclaw--iso-timestamp ended))
+                     (started . ,(if eclaw--session-started
+                                     (eclaw--iso-timestamp eclaw--session-started)
+                                   ""))
+                     (ended . ,(eclaw--iso-timestamp ended))
+                     (model . ,eclaw-model)
+                     (folder . ,(eclaw--folder))
+                     (usage . ,eclaw--usage-conversation)
+                     (messages . ,(or eclaw-conversation '())))))
+    (make-directory dir t)
+    (with-temp-buffer
+      (set-buffer-file-coding-system 'utf-8-unix)
+      (insert (json-encode snapshot))
+      (write-region (point-min) (point-max) tmp nil 'silent))
+    (rename-file tmp path t)
+    path))
+
+
 
 (defun eclaw--conversation-render-transcript ()
   "Return transcript text from buffer `*eclaw*', or \"\" if the buffer is missing."

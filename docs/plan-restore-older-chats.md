@@ -11,7 +11,7 @@
 Mark steps done here as you go:
 
 - [x] **1a** — Snapshot path helper + format spec (`eclaw.el`)
-- [ ] **1b** — `eclaw--conversation-write-snapshot` (not wired yet)
+- [x] **1b** — `eclaw--conversation-write-snapshot` (not wired yet)
 - [ ] **1c** — Wire snapshot into `eclaw-archive-current-conversation`
 - [ ] **1d** — Smoke: `conversation-snapshot-write`
 - [ ] **2a** — `eclaw--conversation-read-snapshot`
