@@ -365,6 +365,30 @@ Skips tool messages and assistant rows with empty content (tool-only rounds)."
                  (format "%s.md" stamp))))
     (expand-file-name name dir)))
 
+;; Conversation snapshot format (v1)
+;;
+;; JSON file written alongside Markdown archives.  Same basename, .json
+;; extension.  Required keys:
+;;
+;;   version   — integer, currently 1
+;;   id        — ISO8601 timestamp string (archive end time)
+;;   started   — ISO8601 session start (eclaw--session-started)
+;;   ended     — ISO8601 archive time
+;;   model     — eclaw-model string
+;;   folder    — eclaw-folder path at archive time
+;;   usage     — alist: prompt_tokens, completion_tokens
+;;   messages  — full eclaw-conversation list (API message alists)
+
+(defun eclaw--conversation-snapshot-path (time slug)
+  "Return absolute snapshot file path for TIME and optional SLUG."
+  (let* ((dir (eclaw--conversation-archive-dir))
+         (stamp (format-time-string "%Y-%m-%d_%H%M%S" time))
+         (name (if (and slug (not (string-empty-p slug)))
+                   (format "%s_%s.json" stamp slug)
+                 (format "%s.json" stamp))))
+    (expand-file-name name dir)))
+
+
 (defun eclaw--conversation-render-transcript ()
   "Return transcript text from buffer `*eclaw*', or \"\" if the buffer is missing."
   (if-let ((buf (get-buffer "*eclaw*")))
