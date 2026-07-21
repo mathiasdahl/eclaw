@@ -413,6 +413,36 @@ Return the written file path."
     (rename-file tmp path t)
     path))
 
+(defun eclaw--conversation-read-snapshot (file)
+  "Read and validate conversation snapshot FILE.
+Return the parsed snapshot alist, or signal an error when FILE is missing,
+unreadable, or not snapshot format version 1."
+  (unless (and file (stringp file) (file-readable-p file))
+    (error "eclaw: snapshot file missing or unreadable: %s" file))
+  (let* ((json-object-type 'alist)
+         (json-array-type 'list)
+         (json-key-type 'symbol)
+         (snapshot
+          (condition-case err
+              (with-temp-buffer
+                (set-buffer-file-coding-system 'utf-8-unix)
+                (insert-file-contents-literally file)
+                (json-read-from-string (buffer-string)))
+            (error
+             (error "eclaw: invalid snapshot JSON in %s: %s"
+                    file (error-message-string err))))))
+    (let ((version (alist-get 'version snapshot)))
+      (unless (and (integerp version) (= version 1))
+        (error "eclaw: unsupported snapshot version in %s: %S"
+               file version)))
+    (dolist (key '(id started ended model folder usage messages))
+      (unless (assq key snapshot)
+        (error "eclaw: snapshot missing required key %s in %s" key file)))
+    (unless (listp (alist-get 'messages snapshot))
+      (error "eclaw: snapshot messages must be a list in %s" file))
+    snapshot))
+
+
 
 
 (defun eclaw--conversation-render-transcript ()

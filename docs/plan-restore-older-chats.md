@@ -14,7 +14,7 @@ Mark steps done here as you go:
 - [x] **1b** — `eclaw--conversation-write-snapshot` (not wired yet)
 - [x] **1c** — Wire snapshot into `eclaw-archive-current-conversation`
 - [x] **1d** — Smoke: `conversation-snapshot-write`
-- [ ] **2a** — `eclaw--conversation-read-snapshot`
+- [x] **2a** — `eclaw--conversation-read-snapshot`
 - [ ] **2b** — `eclaw-list-archived-conversations`
 - [ ] **2c** — `eclaw-restore-conversation`
 - [ ] **2d** — Smoke: `conversation-restore`
