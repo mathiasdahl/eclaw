@@ -699,6 +699,14 @@
       margin-bottom: 0.45rem;
     }
 
+    .history-item-restorable {
+      cursor: pointer;
+    }
+
+    .history-item-restorable:hover {
+      border-color: var(--border-strong);
+    }
+
     .history-item:last-child {
       margin-bottom: 0;
     }
@@ -995,19 +1003,23 @@
       }
     }
 
+    function renderConversationMessages(data) {
+      messagesEl.innerHTML = "";
+      if (Array.isArray(data.messages)) {
+        for (const msg of data.messages) {
+          if (msg.role === "user" || msg.role === "assistant") {
+            addMessage(msg.content, msg.role);
+          }
+        }
+      }
+      if (data.usage) renderUsageStats(data.usage);
+    }
+
     async function loadSession(options) {
       const quiet = options && options.quiet;
       try {
         const { data } = await apiFetch("api/conversation");
-        messagesEl.innerHTML = "";
-        if (Array.isArray(data.messages)) {
-          for (const msg of data.messages) {
-            if (msg.role === "user" || msg.role === "assistant") {
-              addMessage(msg.content, msg.role);
-            }
-          }
-        }
-        if (data.usage) renderUsageStats(data.usage);
+        renderConversationMessages(data);
       } catch (err) {
         if (quiet) {
           console.debug("eclaw: session load skipped:", err.message);
@@ -1156,7 +1168,10 @@
       return div;
     }
 
+    let chatBusy = false;
+
     function setBusy(busy) {
+      chatBusy = busy;
       sendBtn.disabled = busy;
       resetBtn.disabled = busy;
       loadSessionBtn.disabled = busy;
@@ -1718,6 +1733,34 @@
       renderHistoryState(message || "Could not load conversation history.", true);
     }
 
+    function chatHasContent() {
+      return messagesEl.querySelector(".msg.user, .msg.assistant") != null;
+    }
+
+    async function restoreConversation(file) {
+      if (chatBusy || !file) return;
+      if (chatHasContent()) {
+        const ok = window.confirm(
+          "Restore this archived conversation?\n\nYour current chat will be archived first."
+        );
+        if (!ok) return;
+      }
+      setBusy(true);
+      try {
+        const { ok, data } = await postJson("api/conversations/restore", { file });
+        if (ok && Array.isArray(data.messages)) {
+          renderConversationMessages(data);
+          setHistoryPanelOpen(false);
+        } else {
+          addMessage(data.error || "Restore failed", "error");
+        }
+      } catch (err) {
+        addMessage(String(err), "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
     function renderHistoryList(conversations) {
       if (!historyListEl) return;
       historyListEl.innerHTML = "";
@@ -1725,8 +1768,21 @@
         if (!conv || typeof conv !== "object") continue;
         const li = document.createElement("li");
         li.className = "history-item";
-        if (conv.restorable === false) {
+        const restorable = conv.restorable !== false && typeof conv.file === "string" && conv.file;
+        if (!restorable) {
           li.classList.add("history-item-unrestorable");
+        } else {
+          li.classList.add("history-item-restorable");
+          li.dataset.file = conv.file;
+          li.tabIndex = 0;
+          li.setAttribute("role", "button");
+          li.addEventListener("click", () => restoreConversation(conv.file));
+          li.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              restoreConversation(conv.file);
+            }
+          });
         }
 
         const meta = document.createElement("div");
