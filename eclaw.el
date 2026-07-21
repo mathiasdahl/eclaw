@@ -229,6 +229,22 @@ relative to this directory."
 (defun eclaw--conversation-archive-dir ()
   "Return the directory for conversation archive Markdown files."
   (expand-file-name "conversations/" (eclaw--folder)))
+(defun eclaw--write-utf-8-file (content path)
+  "Write string CONTENT to PATH as UTF-8 without a coding-system prompt.
+Create parent directories when needed.  Uses a temp file and rename."
+  (let* ((dir (file-name-directory path))
+         (tmp (make-temp-file "eclaw-write-" nil
+                              (concat "." (or (file-name-extension path) "tmp"))))
+         (coding-system-for-write 'utf-8-unix))
+    (when dir
+      (make-directory dir t))
+    (with-temp-buffer
+      (set-buffer-multibyte t)
+      (set-buffer-file-coding-system 'utf-8-unix)
+      (insert content)
+      (write-region (point-min) (point-max) tmp nil 'silent))
+    (rename-file tmp path t)))
+
 
 (defun eclaw--agent-log-file ()
   "Return the path to the JSONL log file under `eclaw-folder'."
@@ -393,8 +409,6 @@ Skips tool messages and assistant rows with empty content (tool-only rounds)."
 Return the written file path."
   (let* ((ended time)
          (path (eclaw--conversation-snapshot-path ended slug))
-         (dir (file-name-directory path))
-         (tmp (make-temp-file "eclaw-snapshot-" nil ".json"))
          (snapshot `((version . 1)
                      (id . ,(eclaw--iso-timestamp ended))
                      (started . ,(if eclaw--session-started
@@ -405,13 +419,9 @@ Return the written file path."
                      (folder . ,(eclaw--folder))
                      (usage . ,eclaw--usage-conversation)
                      (messages . ,(or eclaw-conversation '())))))
-    (make-directory dir t)
-    (with-temp-buffer
-      (set-buffer-file-coding-system 'utf-8-unix)
-      (insert (json-encode snapshot))
-      (write-region (point-min) (point-max) tmp nil 'silent))
-    (rename-file tmp path t)
+    (eclaw--write-utf-8-file (json-encode snapshot) path)
     path))
+
 
 (defun eclaw--conversation-read-snapshot (file)
   "Read and validate conversation snapshot FILE.
@@ -620,18 +630,15 @@ Return the written Markdown file path, or nil when there is nothing to archive."
     (let* ((ended (current-time))
            (slug (eclaw--conversation-slug (eclaw--conversation-first-prompt)))
            (path (eclaw--conversation-archive-path ended slug))
-           (dir (file-name-directory path))
            (transcript (eclaw--conversation-render-transcript))
            (tools (or (eclaw--conversation-render-tools) ""))
            (content (concat (eclaw--conversation-archive-frontmatter ended)
                             transcript
                             tools)))
-      (make-directory dir t)
-      (with-temp-file path
-        (set-buffer-file-coding-system 'utf-8-unix)
-        (insert content))
+      (eclaw--write-utf-8-file content path)
       (eclaw--conversation-write-snapshot ended slug)
       path)))
+
 
 
 (defun eclaw--clear-eclaw-buffer ()

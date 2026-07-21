@@ -7,7 +7,7 @@
     (error "smoke archive-utf8 FAIL: %s" label)))
 
 (let* ((tmpdir (make-temp-file "eclaw-smoke-archive-" t))
-       (non-ascii "café 你好")
+       (non-ascii "café 你好 👋")
        (path))
   (setq eclaw-folder tmpdir)
   (setq eclaw-conversation (list (eclaw-user-message non-ascii)))
