@@ -1149,11 +1149,22 @@
       return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
     }
 
+    function eclawPushScriptUrl() {
+      return apiUrl("sw.js");
+    }
+
+    function registrationScriptUrl(registration) {
+      const worker = registration?.active || registration?.waiting || registration?.installing;
+      return worker?.scriptURL || null;
+    }
+
     async function getPushRegistration() {
       const scope = webBaseHref();
+      const eclawScript = eclawPushScriptUrl();
       let registration = await navigator.serviceWorker.getRegistration(scope);
-      if (!registration) {
-        registration = await navigator.serviceWorker.register(apiUrl("sw.js"), { scope });
+      const scriptUrl = registrationScriptUrl(registration);
+      if (!registration || scriptUrl !== eclawScript) {
+        registration = await navigator.serviceWorker.register(eclawScript, { scope });
       }
       return registration;
     }
@@ -1165,7 +1176,7 @@
       }
       pushToggleBtn.hidden = false;
       try {
-        const registration = await navigator.serviceWorker.getRegistration(webBaseHref());
+        const registration = await getPushRegistration();
         const subscription = registration && (await registration.pushManager.getSubscription());
         if (subscription) {
           pushToggleBtn.classList.add("active");
@@ -1189,6 +1200,18 @@
       if (permission !== "granted") {
         throw new Error("Notification permission denied.");
       }
+      const scope = webBaseHref();
+      const eclawScript = eclawPushScriptUrl();
+      const legacyRegistration = await navigator.serviceWorker.getRegistration(scope);
+      if (
+        legacyRegistration &&
+        registrationScriptUrl(legacyRegistration) !== eclawScript
+      ) {
+        const legacySubscription = await legacyRegistration.pushManager.getSubscription();
+        if (legacySubscription) {
+          await legacySubscription.unsubscribe();
+        }
+      }
       const registration = await getPushRegistration();
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
@@ -1208,7 +1231,7 @@
     }
 
     async function unsubscribePush() {
-      const registration = await navigator.serviceWorker.getRegistration(webBaseHref());
+      const registration = await getPushRegistration();
       const subscription = registration && (await registration.pushManager.getSubscription());
       if (!subscription) {
         await refreshPushUi();
@@ -1235,7 +1258,7 @@
         pushBusy = true;
         pushToggleBtn.disabled = true;
         try {
-          const registration = await navigator.serviceWorker.getRegistration(webBaseHref());
+          const registration = await getPushRegistration();
           const existing = registration && (await registration.pushManager.getSubscription());
           if (existing) {
             await unsubscribePush();
