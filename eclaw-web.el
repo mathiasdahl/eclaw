@@ -273,7 +273,7 @@ correctly.  Leave empty when the app is mounted at the site root."
      `((messages . ,(eclaw-conversation-display-messages))
        (usage . ,(eclaw-usage-stats))
        (restored_from . ,(or eclaw--restored-from-file :json-false))
-       (session_dirty . ,(if eclaw--session-dirty-p t :json-false)))))
+       (session_dirty . ,(if eclaw--session-dirty-p t :json-false))))))
 
 (defun eclaw-web--archived-conversations-json ()
   "Return archived conversation rows as JSON-friendly alists with string keys."
