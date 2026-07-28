@@ -2,6 +2,12 @@
 
 Eclaw - An AI agent for Emacs
 
+Personal AI assistant inside Emacs, backed by [OpenRouter](https://openrouter.ai).
+Chat with `M-x eclaw-agent-chat` (buffer `*eclaw*`) or programmatically with
+`(eclaw-chat "…")`. The agent can call local tools (files under `eclaw-folder`,
+web search, Emacs introspection, and more). One global session, blocking HTTP, no
+streaming.
+
 ## This is an experiment
 
 This is an experiment, very much created for my own learning. That
@@ -19,6 +25,15 @@ needs to be required:
 (add-to-list 'load-path "/path/to/eclaw")
 (require 'eclaw)
 ```
+
+Set an OpenRouter API key (required — chat fails without one):
+
+```emacs-lisp
+(setq eclaw-api-key "sk-or-…")   ; or export OPENROUTER_API_KEY
+```
+
+Then `M-x eclaw-agent-chat` to start chatting, or `M-x eclaw-explain-buffer` to ask
+about the current buffer.
 
 `(require 'eclaw)` pulls in skills, tools, HTTP transport, web search, and mail in order.
 After a successful load, `(featurep 'eclaw-http)`, `(featurep 'eclaw-web-search)`, and
@@ -42,14 +57,21 @@ approval-gated under default `eclaw-tool-approval-mode`.
 All eclaw-owned data lives under one directory, `eclaw-folder` (default `~/.eclaw/`):
 conversation archives in `conversations/`, notes in `notes/`, agent skills in
 `skills/`, user preferences in `preferences.md`, the JSONL log as `eclaw-log.jsonl`,
-and tool-approval rules in `tool-approval-rules.el`. See [`docs/skills.md`](docs/skills.md)
-and [`docs/preferences.md`](docs/preferences.md).
+and tool-approval rules in `tool-approval-rules.el`.
+
+- **Preferences** — `preferences.md` holds persistent user memory across sessions; the
+  model can update it via `preferences_append` / `preferences_write`. See
+  [`docs/preferences.md`](docs/preferences.md).
+- **Skills** — optional `skills/<id>/SKILL.md` capabilities; index in the system prompt,
+  body read on demand. See [`docs/skills.md`](docs/skills.md).
+- **Notes** — the agent can write `notes/*.txt` under `eclaw-folder`.
 
 When you start a new conversation (`M-x eclaw-reset-conversation` or the web
 **New conversation** button), a non-empty session is archived under
 `conversations/` as both Markdown (human-readable transcript) and JSON (full API
 trace including tool calls). JSON snapshots can be restored later; legacy
-Markdown-only archives cannot.
+Markdown-only archives cannot. `M-x eclaw-save-conversation`, `eclaw-open-conversation`,
+and `eclaw-list-conversations` browse or save archives without resetting.
 
 ```emacs-lisp
 (setq eclaw-folder (expand-file-name "~/my-eclaw/"))
@@ -61,11 +83,28 @@ session, or via a saved rule. See [`docs/tool-approval.md`](docs/tool-approval.m
 List or edit saved rules with `M-x eclaw-list-tool-approval-rules` and related
 commands. Set `eclaw-tool-approval-mode` to `writes` or `off` to relax gating.
 
+**Tool policy** (`tool-policy.el`) is separate from approval: it controls which tools
+are offered to the model at all. Manage via web Settings or `M-x eclaw-list-tool-policy`
+/ `eclaw-set-tool-policy`. See [`docs/tool-policy.md`](docs/tool-policy.md).
+**`eval_elisp` is disabled by default** in policy; enabling it gives the model full
+Emacs session access — see [`docs/eval-elisp-security.md`](docs/eval-elisp-security.md).
+
 Each chat session injects the **session-start date** (no time of day) into the system
 message so the model can answer time-sensitive questions and web searches with
 the correct year. Wall-clock time is available via the `get_datetime` tool.
 The date is frozen until `M-x eclaw-reset-conversation`.
 See [`docs/session-context.md`](docs/session-context.md).
+
+### Configuration
+
+| Variable | Purpose |
+|----------|---------|
+| `eclaw-api-key` / `OPENROUTER_API_KEY` | OpenRouter auth |
+| `eclaw-model` | Active model id (default `deepseek/deepseek-v4-flash:nitro`) |
+| `eclaw-available-models` | Models shown in web UI selector |
+| `eclaw-tools-enabled` | Set `nil` for text-only chat (no tools sent to model) |
+| `eclaw-archive-on-kill-emacs` | Archive non-empty session when Emacs exits |
+| `eclaw-eval-safety-mode` | `full` / `restricted` / `strict` when `eval_elisp` is enabled |
 
 Smoke-test (optional). Full workflow: [`docs/elisp-validation.md`](docs/elisp-validation.md).
 
@@ -169,9 +208,9 @@ shares global `eclaw-conversation` with the `*eclaw*` buffer. Filesystem tool
 calls resolve paths under `eclaw-folder` (not Emacs's current buffer directory).
 
 **Conversation history:** the clock icon opens archived sessions from
-`conversations/*.json`. Click a row to restore that snapshot into the live chat
-(if the current chat has messages, you are asked to confirm first). The
-**Sync live session** button reloads the in-memory Emacs session from
+`conversations/*.json`. Click a row to restore that snapshot into the live chat.
+If the current session has messages, it is archived first (no confirmation
+prompt). The **Sync live session** button reloads the in-memory Emacs session from
 `GET /api/conversation` — it does not read archives from disk.
 
 Programmatic restore from Emacs: `M-x eclaw-restore-conversation` (basename of a
