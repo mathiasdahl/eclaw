@@ -83,7 +83,7 @@ Requires `eclaw-notify-enabled' and configured push infrastructure."
 
 (defcustom eclaw-notify-click-url nil
   "URL opened when the user clicks a push notification.
-Set to your deployed chat page (for example \"https://example.com/secretpath/\")."
+Set to your deployed chat page (for example \"https://my-site.com/secretpath/\")."
   :type 'string
   :group 'eclaw-notify)
 
