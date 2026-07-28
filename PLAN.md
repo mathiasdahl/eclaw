@@ -389,7 +389,7 @@ Bounded `write_file` / patch tool under the same path discipline as `notes_write
 
 #### Deployment context (reference)
 
-- Web UI exposed at **`https://example.com/<secret-path>`** via reverse proxy (single user; URL obscurity acceptable).
+- Web UI exposed at **`https://SECRETSITE.com/<secret-path>`** via reverse proxy (single user; URL obscurity acceptable).
 - **`eclaw-web-base-path`** and **`ECLAW_WEB_BASE`** in **`web/chat.html`** / **`eclaw-web.el`** already support subpath deploys.
 - **Always-on:** Emacs on the cloud server runs eclaw continuously once started — no separate push relay; Emacs sends pushes when work completes.
 - **External tools OK:** Web Push crypto (VAPID JWT, payload encryption) must **not** be implemented in Elisp. Use Python (`pywebpush`), the Node `web-push` CLI, or any other suitable external tool installable on the cloud server. Prefer the simplest reliable option.
@@ -448,7 +448,7 @@ eclaw-chat finishes → eclaw-notify.el → call-process → external push scrip
 - Push **send** stays server-side only (Emacs → script → FCM); no public send endpoint.
 - VAPID private key and subscribe secret not in skills or tool-exposed config.
 
-#### Reverse proxy checklist (example.com)
+#### Reverse proxy checklist (SECRETSITE.com)
 
 - Proxy `/SECRETPATH/sw.js` and `/SECRETPATH/api/push/*` to Emacs web server.
 - Pass full path prefix to Emacs (**`eclaw-web--strip-base-path`** expects it).
