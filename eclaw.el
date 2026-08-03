@@ -267,9 +267,11 @@ Create parent directories when needed.  Uses a temp file and rename."
 
 (defvar eclaw-conversation nil
   "Canonical chat history for the active session, excluding system.
-Each element is an alist: user (`role' user, `content'), assistant
-(`role' assistant, `content' and/or `tool_calls' as returned by the
-API), or tool (`role' tool, `tool_call_id', `content').  The current
+Each element is an alist: user (`role' user, `content', optional `at'),
+assistant (`role' assistant, `content' and/or `tool_calls' as returned
+by the API, optional `at'), or tool (`role' tool, `tool_call_id',
+`content').  When present, `at' is an ISO 8601 timestamp string for UI
+display only; it is stripped before OpenRouter requests.  The current
 user turn is appended at the start of `eclaw-chat' before any request.
 Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
@@ -350,7 +352,8 @@ Mutated by `eclaw-chat' and `eclaw-reset-conversation'.")
 
 (defun eclaw-conversation-display-messages ()
   "Return a list of user/assistant message alists for UI display.
-Skips tool messages and assistant rows with empty content (tool-only rounds)."
+Skips tool messages and assistant rows with empty content (tool-only rounds).
+Each alist includes optional `at' when stored on the conversation row."
   (let ((out nil))
     (dolist (msg (or eclaw-conversation '()))
       (let ((role (alist-get 'role msg))
@@ -358,8 +361,24 @@ Skips tool messages and assistant rows with empty content (tool-only rounds)."
         (when (and (member role '("user" "assistant"))
                    (stringp content)
                    (not (string-empty-p content)))
-          (push `((role . ,role) (content . ,content)) out))))
+          (push `((role . ,role) (content . ,content)
+                  ,@(when-let ((at (alist-get 'at msg)))
+                      `((at . ,at))))
+                out))))
     (nreverse out)))
+
+(defun eclaw-conversation-last-turn-display-messages ()
+  "Return display alists for the most recent user turn.
+When the last display message is an assistant reply, return the preceding
+user message and that assistant message.  When it is a lone user message,
+return that message only."
+  (let ((msgs (eclaw-conversation-display-messages)))
+    (when msgs
+      (let ((last (car (last msgs))))
+        (if (equal (alist-get 'role last) "user")
+            (list last)
+          (when (>= (length msgs) 2)
+            (list (nth (- (length msgs) 2) msgs) last)))))))
 
 (defun eclaw--session-has-content-p ()
   "Non-nil when the current session has content worth archiving."
@@ -742,12 +761,14 @@ When `eclaw--session-started' is set, append a frozen session context block."
 (defun eclaw-user-message (content)
   "Return a user message alist with string CONTENT."
   `((role . "user")
-    (content . ,content)))
+    (content . ,content)
+    (at . ,(eclaw--iso-timestamp))))
 
 (defun eclaw-assistant-message (content)
   "Return an assistant message alist with string CONTENT (plain reply)."
   `((role . "assistant")
-    (content . ,content)))
+    (content . ,content)
+    (at . ,(eclaw--iso-timestamp))))
 
 (defun eclaw-tool-message (tool-call-id content)
   "Return a tool result message for TOOL-CALL-ID with string CONTENT."
@@ -755,19 +776,35 @@ When `eclaw--session-started' is set, append a frozen session context block."
     (tool_call_id . ,tool-call-id)
     (content . ,content)))
 
+(defun eclaw--message-for-api (msg)
+  "Return MSG with only keys accepted by the chat completion API."
+  (let* ((role (alist-get 'role msg))
+         (out (list (cons 'role role))))
+    (when-let ((content (alist-get 'content msg)))
+      (push (cons 'content content) out))
+    (when-let ((tool-call-id (alist-get 'tool_call_id msg)))
+      (push (cons 'tool_call_id tool-call-id) out))
+    (when-let ((tool-calls (alist-get 'tool_calls msg)))
+      (push (cons 'tool_calls tool-calls) out))
+    (nreverse out)))
+
 (defun eclaw-build-messages ()
   "Build the outgoing message list from canonical `eclaw-conversation'.
 Returns [system] + conversation as a flat list suitable for
 `eclaw-build-chat-payload'.  The conversation must already include
-the current user turn (and any in-flight assistant/tool rows)."
-  (append (list (eclaw-system-message)) eclaw-conversation nil))
+the current user turn (and any in-flight assistant/tool rows).
+UI-only keys such as `at' are stripped from conversation rows."
+  (append (list (eclaw-system-message))
+          (mapcar #'eclaw--message-for-api (or eclaw-conversation '()))
+          nil))
 
 (defun eclaw--normalize-assistant-message (message)
   "Return a compact assistant MESSAGE alist for conversation storage.
-Keeps only `role', `content', and `tool_calls' (when present)."
+Keeps only `role', `content', `tool_calls' (when present), and `at'."
   (when message
     (let ((out (list (cons 'role "assistant")
-                     (cons 'content (alist-get 'content message)))))
+                     (cons 'content (alist-get 'content message))
+                     (cons 'at (eclaw--iso-timestamp)))))
       (when-let ((tool-calls (alist-get 'tool_calls message)))
         (push (cons 'tool_calls tool-calls) out))
       out)))

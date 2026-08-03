@@ -96,6 +96,7 @@ correctly.  Leave empty when the app is mounted at the site root."
 (declare-function eclaw--folder "eclaw" ())
 (declare-function eclaw-usage-stats "eclaw" ())
 (declare-function eclaw-conversation-display-messages "eclaw" ())
+(declare-function eclaw-conversation-last-turn-display-messages "eclaw" ())
 (declare-function eclaw-list-archived-conversations "eclaw" ())
 (declare-function eclaw-restore-conversation "eclaw" (file))
 (declare-function eclaw-tool-policy-list "eclaw-tools" ())
@@ -251,6 +252,7 @@ correctly.  Leave empty when the app is mounted at the site root."
                   (eclaw-web--append-transcript message reply)
                   (eclaw-web--json-response
                    process 200 `((reply . ,reply)
+                                 (turn_messages . ,(eclaw-conversation-last-turn-display-messages))
                                  (error . nil)
                                  (usage . ,(eclaw-usage-stats))))))
               (eclaw-web--json-response

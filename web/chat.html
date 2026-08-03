@@ -213,6 +213,38 @@
       min-height: 12rem;
     }
 
+    .msg-row {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .msg-row.user {
+      align-self: flex-end;
+      max-width: 90%;
+    }
+
+    .msg-row.assistant {
+      align-self: flex-start;
+      max-width: 95%;
+    }
+
+    .msg-time {
+      font-size: 0.68rem;
+      line-height: 1;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 0.15rem;
+      user-select: none;
+    }
+
+    .msg-row.user .msg-time {
+      align-self: flex-end;
+    }
+
+    .msg-row.assistant .msg-time {
+      align-self: flex-start;
+    }
+
     .msg {
       padding: 0.65rem 0.85rem;
       border-radius: var(--radius);
@@ -223,8 +255,6 @@
 
     .msg.user {
       background: var(--msg-user-bg);
-      align-self: flex-end;
-      max-width: 90%;
     }
 
     [data-theme="matrix-subtle"] .msg.user,
@@ -236,8 +266,6 @@
     .msg.assistant {
       background: var(--msg-assistant-bg);
       border: 1px solid var(--msg-assistant-border);
-      align-self: flex-start;
-      max-width: 95%;
       animation: var(--reveal-anim);
       white-space: normal;
     }
@@ -1008,7 +1036,7 @@
       if (Array.isArray(data.messages)) {
         for (const msg of data.messages) {
           if (msg.role === "user" || msg.role === "assistant") {
-            addMessage(msg.content, msg.role);
+            addMessage(msg.content, msg.role, msg.at);
           }
         }
       }
@@ -1159,7 +1187,23 @@
       return DOMPurify.sanitize(marked.parse(text));
     }
 
-    function addMessage(text, className) {
+    function addMessage(text, className, at) {
+      const isChatBubble = className === "user" || className === "assistant";
+      let container;
+      if (isChatBubble) {
+        container = document.createElement("div");
+        container.className = "msg-row " + className;
+        const timeEl = createMessageTimeEl(at);
+        if (timeEl) container.appendChild(timeEl);
+      } else {
+        container = document.createElement("div");
+        container.className = "msg " + className;
+        container.textContent = text;
+        messagesEl.appendChild(container);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return container;
+      }
+
       const div = document.createElement("div");
       div.className = "msg " + className;
       if (className === "assistant") {
@@ -1172,9 +1216,10 @@
       } else {
         div.textContent = text;
       }
-      messagesEl.appendChild(div);
+      container.appendChild(div);
+      messagesEl.appendChild(container);
       messagesEl.scrollTop = messagesEl.scrollHeight;
-      return div;
+      return container;
     }
 
     let chatBusy = false;
@@ -1715,6 +1760,58 @@
       return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
     }
 
+    function formatMessageTime(iso) {
+      if (!iso || typeof iso !== "string") return "";
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return iso;
+      const now = new Date();
+      const sameDay =
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate();
+      if (sameDay) {
+        return date.toLocaleTimeString(undefined, { timeStyle: "short" });
+      }
+      return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }
+
+    function createMessageTimeEl(at) {
+      if (!at) return null;
+      const label = formatMessageTime(at);
+      if (!label) return null;
+      const timeEl = document.createElement("time");
+      timeEl.className = "msg-time";
+      timeEl.dateTime = at;
+      timeEl.textContent = label;
+      return timeEl;
+    }
+
+    function setMessageTimestamp(rowEl, at) {
+      if (!rowEl || !rowEl.classList.contains("msg-row") || !at) return;
+      const existing = rowEl.querySelector(".msg-time");
+      if (existing) {
+        existing.dateTime = at;
+        existing.textContent = formatMessageTime(at);
+        return;
+      }
+      const timeEl = createMessageTimeEl(at);
+      if (timeEl) {
+        rowEl.insertBefore(timeEl, rowEl.firstChild);
+      }
+    }
+
+    function applyTurnTimestamps(turnMessages, userRow, assistantRow) {
+      if (!Array.isArray(turnMessages)) return;
+      for (const msg of turnMessages) {
+        if (!msg || !msg.at) continue;
+        if (msg.role === "user" && userRow) {
+          setMessageTimestamp(userRow, msg.at);
+        } else if (msg.role === "assistant" && assistantRow) {
+          setMessageTimestamp(assistantRow, msg.at);
+        }
+      }
+    }
+
     function truncateHistoryPreview(text, maxLen) {
       const value = String(text || "").trim();
       if (value.length <= maxLen) return value;
@@ -1868,6 +1965,7 @@
       if (!message) return;
       promptEl.value = "";
       addMessage(message, "user");
+      const userRow = messagesEl.lastElementChild;
       if (sessionRestoredFrom) sessionDirty = true;
       setBusy(true);
       const status = addMessage(themeCopy("thinking"), "status");
@@ -1876,6 +1974,8 @@
         status.remove();
         if (ok && data.reply != null) {
           addMessage(data.reply, "assistant");
+          const assistantRow = messagesEl.lastElementChild;
+          applyTurnTimestamps(data.turn_messages, userRow, assistantRow);
           if (data.usage) renderUsageStats(data.usage);
         } else {
           addMessage(data.error || "Request failed", "error");
